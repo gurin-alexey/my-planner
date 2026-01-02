@@ -1,6 +1,4 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import { supabase } from './supabase'
 import {
   format,
@@ -22,6 +20,7 @@ import {
   isSameMonth
 } from 'date-fns'
 import { ru } from 'date-fns/locale'
+import DatePicker from './components/DatePicker'
 
 // Хук для дебаунса
 function useDebounce(value, delay) {
@@ -46,38 +45,23 @@ const SidebarContent = ({
   onDragStartFolder, onDropFolderSorting,
   onDragStartList, onDropListSorting,
   hoveredListId, setHoveredListId,
-  dragOverListInfo, setDragOverListInfo
+  dragOverListInfo, setDragOverListInfo,
+  dragOverFolderInfo, setDragOverFolderInfo,
+  setActiveView, activeView
 }) => {
   const today = new Date().getDate()
   const days = ['пн.', 'вт.', 'ср.', 'чт.', 'пт.', 'сб.', 'вс.']
 
   return (
     <div className="h-full flex flex-col bg-[#F9F9F9] border-r border-slate-200 font-sans text-[#333]">
-      {/* Top Action Buttons */}
-      <div className="p-4 grid grid-cols-5 gap-1 border-b border-slate-100">
-        {[
-          { icon: '📁', label: 'ПРОЕКТ' },
-          { icon: '👨‍💻', label: 'САНЯ' },
-          { icon: '⌛', label: 'ДЕДЛА' },
-          { icon: '📍', label: 'поездки' },
-          { icon: '🌐', label: 'САЙТ' }
-        ].map((item, i) => (
-          <div key={i} className="flex flex-col items-center justify-center p-2 rounded-xl hover:bg-white hover:shadow-sm border border-transparent hover:border-slate-100 cursor-pointer transition-all">
-            <span className="text-lg mb-1">{item.icon}</span>
-            <span className="text-[9px] font-bold text-slate-500 uppercase tracking-tighter">{item.label}</span>
-          </div>
-        ))}
-      </div>
-
-      <div className="flex-1 overflow-y-auto pt-4 no-scrollbar">
+      <div className="flex-1 overflow-y-auto pt-6 no-scrollbar">
         {/* Смарт-списки */}
-        <div className="px-3 space-y-0.5 mb-6">
+        <div className="px-3 space-y-0.5 mb-8">
           {[
-            { id: 'inbox', label: 'Входящие', icon: '📥', count: tasks.filter(t => !t.list_id && !t.is_completed).length, action: resetFilters, active: !selectedTagId && !selectedListId && !dateFilter },
-            { id: 'today', label: 'Сегодня', icon: '🗓️', count: tasks.filter(t => t.due_date?.split('T')[0] === new Date().toISOString().split('T')[0] && !t.is_completed).length, action: () => setDateFilter('today'), active: dateFilter === 'today' },
-            { id: 'tomorrow', label: 'Завтра', icon: '🌅', count: tasks.filter(t => t.due_date?.split('T')[0] === new Date(Date.now() + 86400000).toISOString().split('T')[0] && !t.is_completed).length, action: () => setDateFilter('tomorrow'), active: dateFilter === 'tomorrow' },
-            { id: 'next7', label: 'Следующие 7 дней', icon: '📅', count: 0, action: () => { }, active: false },
-            { id: 'summary', label: 'Сводка', icon: '📋', count: 0, action: () => { }, active: false },
+            { id: 'calendar', label: 'Календарь', icon: '📅', count: 0, action: () => setActiveView('calendar'), active: activeView === 'calendar' },
+            { id: 'inbox', label: 'Входящие', icon: '📥', count: tasks.filter(t => !t.list_id && !t.is_completed).length, action: () => { resetFilters(); setActiveView('tasks'); }, active: activeView === 'tasks' && !selectedTagId && !selectedListId && !dateFilter },
+            { id: 'today', label: 'Сегодня', icon: '🗓️', count: tasks.filter(t => t.due_date?.split('T')[0] === new Date().toISOString().split('T')[0] && !t.is_completed).length, action: () => setDateFilter('today'), active: activeView === 'tasks' && dateFilter === 'today' },
+            { id: 'tomorrow', label: 'Завтра', icon: '🌅', count: tasks.filter(t => t.due_date?.split('T')[0] === new Date(Date.now() + 86400000).toISOString().split('T')[0] && !t.is_completed).length, action: () => setDateFilter('tomorrow'), active: activeView === 'tasks' && dateFilter === 'tomorrow' },
           ].map(item => (
             <button key={item.id} onClick={() => { item.action(); setSelectedListId(null); setSelectedTagId(null); setIsSidebarOpen(false); }}
               className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-[13px] font-medium transition ${item.active ? 'bg-[#E5E5E5] text-black shadow-none' : 'text-[#666] hover:bg-[#F1F1F1]'}`}>
@@ -87,156 +71,208 @@ const SidebarContent = ({
           ))}
         </div>
 
-        {/* ПРОЕКТЫ */}
-        <div className="px-6 mb-2">
-          <p className="text-[11px] font-bold text-slate-400">Список</p>
+        {/* ПРОЕКТЫ (Header) */}
+        <div className="px-6 mb-2 flex items-center justify-between group">
+          <div className="flex items-center gap-2 cursor-pointer w-full" onClick={() => toggleFolder('lists_section')}>
+            <span className={`text-[9px] text-slate-400 transition transform ${collapsedFolders['lists_section'] ? '-rotate-90' : ''}`}>▼</span>
+            <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Списки</p>
+          </div>
+          <button onClick={() => setIsAddPopupOpen(true)} className="text-slate-300 hover:text-black transition opacity-0 group-hover:opacity-100 text-lg leading-none mb-1 cursor-pointer z-10">+</button>
         </div>
 
-        <div className="px-3">
-          {allFolders.map(folder => (
-            <div key={folder.id}
-              draggable="true"
-              onDragStart={(e) => onDragStartFolder(e, folder.id)}
-              onDragOver={e => { e.preventDefault(); e.currentTarget.classList.add('bg-slate-100'); }}
-              onDragLeave={e => e.currentTarget.classList.remove('bg-slate-100')}
-              onDrop={e => {
-                e.currentTarget.classList.remove('bg-slate-100');
-                const draggedFolderId = e.dataTransfer.getData('folderId');
-                if (draggedFolderId) onDropFolderSorting(e, folder.id);
-                else onDrop(e, folder.id);
-              }}
-              className="mb-0.5 rounded-lg transition-colors border border-transparent"
-            >
-              <div className="flex items-center justify-between px-3 py-1.5 rounded-lg cursor-pointer hover:bg-[#F1F1F1] group" onClick={() => toggleFolder(folder.id)}>
-                <div className="flex items-center gap-2 font-semibold text-[#555] text-[13px]">
-                  <span className={`text-[7px] transition transform ${collapsedFolders[folder.id] ? '-rotate-90' : ''}`}>▼</span>
-                  <span className="text-base">📂</span>
-                  <span className="uppercase">{folder.name}</span>
-                </div>
-                <span className="text-[11px] text-slate-400 ml-auto pr-2">
-                  {tasks.filter(t => allLists.some(l => l.folder_id === folder.id && l.id === t.list_id) && !t.is_completed).length || ''}
-                </span>
-                <button onClick={(e) => deleteFolder(e, folder.id)} className="hidden group-hover:block text-slate-300 hover:text-red-500 text-[10px]">✕</button>
-              </div>
+        {!collapsedFolders['lists_section'] && (
+          <div className="px-3 mb-8">
+            {allFolders.map(folder => (
+              <div key={folder.id}
+                draggable="true"
+                onDragStart={(e) => onDragStartFolder(e, folder.id)}
+                onDragOver={e => {
+                  e.preventDefault();
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const y = e.clientY - rect.top;
+                  const position = y < rect.height / 2 ? 'top' : 'bottom';
+                  const types = Array.from(e.dataTransfer.types).map(t => t.toLowerCase());
+                  if (types.includes('folderid')) {
+                    setDragOverFolderInfo({ id: folder.id, position });
+                  }
+                }}
+                onDragLeave={e => {
+                  setDragOverFolderInfo(null);
+                }}
+                onDrop={e => {
+                  const pos = dragOverFolderInfo?.position;
+                  setDragOverFolderInfo(null);
+                  const draggedFolderId = e.dataTransfer.getData('folderId');
+                  if (draggedFolderId) onDropFolderSorting(e, folder.id, pos);
+                  else onDrop(e, folder.id);
+                }}
+                className={`mb-0.5 rounded-lg transition-colors border border-transparent box-border relative ${dragOverFolderInfo?.id === folder.id && dragOverFolderInfo?.position === 'top' ? 'mt-1' : ''} ${dragOverFolderInfo?.id === folder.id && dragOverFolderInfo?.position === 'bottom' ? 'mb-1' : ''}`}
+              >
+                {/* Drag Insertion Indicator Line for Folder */}
+                {dragOverFolderInfo?.id === folder.id && (
+                  <div className={`absolute left-0 right-0 h-0.5 bg-indigo-500 z-30 rounded-full ${dragOverFolderInfo.position === 'top' ? '-top-[3px]' : '-bottom-[3px]'}`}>
+                    <div className="absolute left-0 -top-1 w-2 h-2 rounded-full bg-indigo-500 border-2 border-white"></div>
+                  </div>
+                )}
 
-              {!collapsedFolders[folder.id] && (
-                <div className="ml-5 space-y-0.5">
-                  {allLists.filter(l => l.folder_id === folder.id).map(list => (
-                    <button key={list.id}
-                      draggable="true"
-                      onDragStart={(e) => onDragStartList(e, list.id)}
-                      onDragOver={e => {
-                        e.preventDefault();
-                        const rect = e.currentTarget.getBoundingClientRect();
-                        const y = e.clientY - rect.top;
-                        const position = y < rect.height / 2 ? 'top' : 'bottom';
-                        // DISTINGUISH: list sorting vs task move
-                        const types = Array.from(e.dataTransfer.types).map(t => t.toLowerCase());
-                        if (types.includes('listidforsort')) {
-                          setDragOverListInfo({ id: list.id, position });
+                <div className="flex items-center justify-between px-3 py-1.5 rounded-lg cursor-pointer hover:bg-[#F1F1F1] group" onClick={() => toggleFolder(folder.id)}>
+                  <div className="flex items-center gap-2 font-semibold text-[#555] text-[13px]">
+                    <span className={`text-[7px] transition transform ${collapsedFolders[folder.id] ? '-rotate-90' : ''}`}>▼</span>
+                    <span className="text-base">📂</span>
+                    <span className="truncate uppercase">{folder.name}</span>
+                  </div>
+                  <span className="text-[11px] text-slate-400 ml-auto pr-2">
+                    {tasks.filter(t => allLists.some(l => l.folder_id === folder.id && l.id === t.list_id) && !t.is_completed).length || ''}
+                  </span>
+                  <button onClick={(e) => deleteFolder(e, folder.id)} className="hidden group-hover:block text-slate-300 hover:text-red-500 text-[10px]">✕</button>
+                </div>
+
+                {!collapsedFolders[folder.id] && (
+                  <div className="ml-5 space-y-0.5">
+                    {allLists.filter(l => l.folder_id === folder.id).map(list => (
+                      <button key={list.id}
+                        draggable="true"
+                        onDragStart={(e) => onDragStartList(e, list.id)}
+                        onDragOver={e => {
+                          e.preventDefault();
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          const y = e.clientY - rect.top;
+                          const position = y < rect.height / 2 ? 'top' : 'bottom';
+                          // DISTINGUISH: list sorting vs task move
+                          const types = Array.from(e.dataTransfer.types).map(t => t.toLowerCase());
+                          if (types.includes('listidforsort')) {
+                            setDragOverListInfo({ id: list.id, position });
+                            setHoveredListId(null);
+                          } else {
+                            setHoveredListId(list.id);
+                            setDragOverListInfo(null);
+                          }
+                        }}
+                        onDragLeave={() => { setHoveredListId(null); setDragOverListInfo(null); }}
+                        onDrop={e => {
+                          const pos = dragOverListInfo?.position;
                           setHoveredListId(null);
-                        } else {
-                          setHoveredListId(list.id);
                           setDragOverListInfo(null);
-                        }
-                      }}
-                      onDragLeave={() => { setHoveredListId(null); setDragOverListInfo(null); }}
-                      onDrop={e => {
-                        const pos = dragOverListInfo?.position;
-                        setHoveredListId(null);
-                        setDragOverListInfo(null);
-                        const draggedListId = e.dataTransfer.getData('listIdForSort');
-                        if (draggedListId) onDropListSorting(e, list.id, pos);
-                        else onDropTask(e, list.id);
-                      }}
-                      onClick={() => { setSelectedListId(list.id); setSelectedTagId(null); setDateFilter(null); setIsSidebarOpen(false); }}
-                      className={`relative group w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all duration-200 ${selectedListId === list.id ? 'bg-[#E5E5E5] text-black shadow-sm' : hoveredListId === list.id ? 'bg-indigo-600 text-white scale-[1.02] shadow-lg z-10' : 'text-[#666] hover:bg-[#F1F1F1]'} ${dragOverListInfo?.id === list.id && dragOverListInfo?.position === 'top' ? 'mt-1' : ''} ${dragOverListInfo?.id === list.id && dragOverListInfo?.position === 'bottom' ? 'mb-1' : ''}`}
-                    >
-                      {/* Drag Insertion Indicator Line */}
-                      {dragOverListInfo?.id === list.id && (
-                        <div className={`absolute left-0 right-0 h-0.5 bg-indigo-500 z-30 rounded-full ${dragOverListInfo.position === 'top' ? '-top-[3px]' : '-bottom-[3px]'}`}>
-                          <div className="absolute left-0 -top-1 w-2 h-2 rounded-full bg-indigo-500 border-2 border-white"></div>
+                          const draggedListId = e.dataTransfer.getData('listIdForSort');
+                          if (draggedListId) onDropListSorting(e, list.id, pos);
+                          else onDropTask(e, list.id);
+                        }}
+                        onClick={() => { setSelectedListId(list.id); setSelectedTagId(null); setDateFilter(null); setIsSidebarOpen(false); setActiveView('tasks'); }}
+                        className={`relative group w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all duration-200 ${selectedListId === list.id ? 'bg-[#E5E5E5] text-black shadow-sm' : hoveredListId === list.id ? 'bg-indigo-600 text-white scale-[1.02] shadow-lg z-10' : 'text-[#666] hover:bg-[#F1F1F1]'} ${dragOverListInfo?.id === list.id && dragOverListInfo?.position === 'top' ? 'mt-1' : ''} ${dragOverListInfo?.id === list.id && dragOverListInfo?.position === 'bottom' ? 'mb-1' : ''}`}
+                      >
+                        {/* Drag Insertion Indicator Line */}
+                        {dragOverListInfo?.id === list.id && (
+                          <div className={`absolute left-0 right-0 h-0.5 bg-indigo-500 z-30 rounded-full ${dragOverListInfo.position === 'top' ? '-top-[3px]' : '-bottom-[3px]'}`}>
+                            <div className="absolute left-0 -top-1 w-2 h-2 rounded-full bg-indigo-500 border-2 border-white"></div>
+                          </div>
+                        )}
+                        <div className="flex items-center gap-3 overflow-hidden">
+                          <span className={`opacity-90 ${hoveredListId === list.id ? 'grayscale-0' : ''}`}>{list.name.toUpperCase().includes('ЦЕЛИ') ? '⭐' : list.name.toUpperCase().includes('КУПИТЬ') ? '🛒' : '≡'}</span>
+                          <span className="truncate">{list.name}</span>
                         </div>
-                      )}
-                      <div className="flex items-center gap-3 overflow-hidden">
-                        <span className={`opacity-90 ${hoveredListId === list.id ? 'grayscale-0' : ''}`}>{list.name.toUpperCase().includes('ЦЕЛИ') ? '⭐' : list.name.toUpperCase().includes('КУПИТЬ') ? '🛒' : '≡'}</span>
-                        <span className="truncate">{list.name}</span>
-                      </div>
-                      <span className={`text-[11px] ml-auto pr-2 ${hoveredListId === list.id ? 'text-indigo-100' : 'text-slate-400'}`}>
-                        {tasks.filter(t => t.list_id === list.id && !t.is_completed).length || ''}
-                      </span>
-                      <button onClick={(e) => deleteList(e, list.id)} className={`hidden group-hover:block transition-colors ${hoveredListId === list.id ? 'text-white' : 'text-slate-300 hover:text-red-500'} text-[10px]`}>✕</button>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
-
-          {allLists.filter(l => !l.folder_id).map(list => (
-            <button key={list.id}
-              draggable="true"
-              onDragStart={(e) => onDragStartList(e, list.id)}
-              onDragOver={e => {
-                e.preventDefault();
-                const rect = e.currentTarget.getBoundingClientRect();
-                const y = e.clientY - rect.top;
-                const position = y < rect.height / 2 ? 'top' : 'bottom';
-                const types = Array.from(e.dataTransfer.types).map(t => t.toLowerCase());
-                if (types.includes('listidforsort')) {
-                  setDragOverListInfo({ id: list.id, position });
-                  setHoveredListId(null);
-                } else {
-                  setHoveredListId(list.id);
-                  setDragOverListInfo(null);
-                }
-              }}
-              onDragLeave={() => { setHoveredListId(null); setDragOverListInfo(null); }}
-              onDrop={e => {
-                const pos = dragOverListInfo?.position;
-                setHoveredListId(null);
-                setDragOverListInfo(null);
-                const draggedListId = e.dataTransfer.getData('listIdForSort');
-                const draggedListIdForFolder = e.dataTransfer.getData('listId');
-                if (draggedListId) onDropListSorting(e, list.id, pos);
-                else if (draggedListIdForFolder) onDrop(e, null);
-                else onDropTask(e, list.id);
-              }}
-              onClick={() => { setSelectedListId(list.id); setSelectedTagId(null); setDateFilter(null); setIsSidebarOpen(false); }}
-              className={`relative group w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all duration-200 ${selectedListId === list.id ? 'bg-[#E5E5E5] text-black shadow-sm' : hoveredListId === list.id ? 'bg-indigo-600 text-white scale-[1.02] shadow-lg z-10' : 'text-[#666] hover:bg-[#F1F1F1]'} ${dragOverListInfo?.id === list.id && dragOverListInfo?.position === 'top' ? 'mt-1' : ''} ${dragOverListInfo?.id === list.id && dragOverListInfo?.position === 'bottom' ? 'mb-1' : ''}`}
-            >
-              {/* Drag Insertion Indicator Line */}
-              {dragOverListInfo?.id === list.id && (
-                <div className={`absolute left-0 right-0 h-0.5 bg-indigo-500 z-30 rounded-full ${dragOverListInfo.position === 'top' ? '-top-[3px]' : '-bottom-[3px]'}`}>
-                  <div className="absolute left-0 -top-1 w-2 h-2 rounded-full bg-indigo-500 border-2 border-white"></div>
-                </div>
-              )}
-              <div className="flex items-center gap-3 flex-1 overflow-hidden">
-                <span className={`opacity-70 grayscale ${hoveredListId === list.id ? 'grayscale-0' : ''}`}>≡</span>
-                <span className="truncate uppercase">{list.name}</span>
+                        <span className={`text-[11px] ml-auto pr-2 ${hoveredListId === list.id ? 'text-indigo-100' : 'text-slate-400'}`}>
+                          {tasks.filter(t => t.list_id === list.id && !t.is_completed).length || ''}
+                        </span>
+                        <button onClick={(e) => deleteList(e, list.id)} className={`hidden group-hover:block transition-colors ${hoveredListId === list.id ? 'text-white' : 'text-slate-300 hover:text-red-500'} text-[10px]`}>✕</button>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
-              <span className={`text-[11px] ml-auto pr-2 ${hoveredListId === list.id ? 'text-indigo-100' : 'text-slate-400'}`}>
-                {tasks.filter(t => t.list_id === list.id && !t.is_completed).length || ''}
-              </span>
-              <button onClick={(e) => deleteList(e, list.id)} className={`hidden group-hover:block transition-colors ${hoveredListId === list.id ? 'text-white' : 'text-slate-300 hover:text-red-500'} text-[10px]`}>✕</button>
-            </button>
-          ))}
+            ))}
+
+            {allLists.filter(l => !l.folder_id).map(list => (
+              <button key={list.id}
+                draggable="true"
+                onDragStart={(e) => onDragStartList(e, list.id)}
+                onDragOver={e => {
+                  e.preventDefault();
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const y = e.clientY - rect.top;
+                  const position = y < rect.height / 2 ? 'top' : 'bottom';
+                  const types = Array.from(e.dataTransfer.types).map(t => t.toLowerCase());
+                  if (types.includes('listidforsort')) {
+                    setDragOverListInfo({ id: list.id, position });
+                    setHoveredListId(null);
+                  } else {
+                    setHoveredListId(list.id);
+                    setDragOverListInfo(null);
+                  }
+                }}
+                onDragLeave={() => { setHoveredListId(null); setDragOverListInfo(null); }}
+                onDrop={e => {
+                  const pos = dragOverListInfo?.position;
+                  setHoveredListId(null);
+                  setDragOverListInfo(null);
+                  const draggedListId = e.dataTransfer.getData('listIdForSort');
+                  const draggedListIdForFolder = e.dataTransfer.getData('listId');
+                  if (draggedListId) onDropListSorting(e, list.id, pos);
+                  else if (draggedListIdForFolder) onDrop(e, null);
+                  else onDropTask(e, list.id);
+                }}
+                onClick={() => { setSelectedListId(list.id); setSelectedTagId(null); setDateFilter(null); setIsSidebarOpen(false); setActiveView('tasks'); }}
+                className={`relative group w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all duration-200 ${selectedListId === list.id ? 'bg-[#E5E5E5] text-black shadow-sm' : hoveredListId === list.id ? 'bg-indigo-600 text-white scale-[1.02] shadow-lg z-10' : 'text-[#666] hover:bg-[#F1F1F1]'} ${dragOverListInfo?.id === list.id && dragOverListInfo?.position === 'top' ? 'mt-1' : ''} ${dragOverListInfo?.id === list.id && dragOverListInfo?.position === 'bottom' ? 'mb-1' : ''}`}
+              >
+                {/* Drag Insertion Indicator Line */}
+                {dragOverListInfo?.id === list.id && (
+                  <div className={`absolute left-0 right-0 h-0.5 bg-indigo-500 z-30 rounded-full ${dragOverListInfo.position === 'top' ? '-top-[3px]' : '-bottom-[3px]'}`}>
+                    <div className="absolute left-0 -top-1 w-2 h-2 rounded-full bg-indigo-500 border-2 border-white"></div>
+                  </div>
+                )}
+                <div className="flex items-center gap-3 flex-1 overflow-hidden">
+                  <span className={`opacity-70 grayscale ${hoveredListId === list.id ? 'grayscale-0' : ''}`}>≡</span>
+                  <span className="truncate uppercase">{list.name}</span>
+                </div>
+                <span className={`text-[11px] ml-auto pr-2 ${hoveredListId === list.id ? 'text-indigo-100' : 'text-slate-400'}`}>
+                  {tasks.filter(t => t.list_id === list.id && !t.is_completed).length || ''}
+                </span>
+                <button onClick={(e) => deleteList(e, list.id)} className={`hidden group-hover:block transition-colors ${hoveredListId === list.id ? 'text-white' : 'text-slate-300 hover:text-red-500'} text-[10px]`}>✕</button>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* TAGS (Header + Collapsible) */}
+        <div className="px-6 mb-2 flex items-center justify-between group">
+          <div className="flex items-center gap-2 cursor-pointer w-full" onClick={() => toggleFolder('tags_section')}>
+            <span className={`text-[9px] text-slate-400 transition transform ${collapsedFolders['tags_section'] ? '-rotate-90' : ''}`}>▼</span>
+            <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Метки</p>
+          </div>
+          <button onClick={() => { /* Logic to add tag - maybe reuse popup or new inline input? For now simple prompt */ const name = prompt('Новая метка:'); if (name) { setNewTagName(name); setTimeout(createTag, 100); } }} className="text-slate-300 hover:text-black transition opacity-0 group-hover:opacity-100 text-lg leading-none mb-1 cursor-pointer z-10">+</button>
         </div>
+
+        {!collapsedFolders['tags_section'] && (
+          <div className="px-3 mb-6">
+            {allTags.map(tag => (
+              <button key={tag.id}
+                onClick={() => { setSelectedTagId(tag.id); setSelectedListId(null); setDateFilter(null); setIsSidebarOpen(false); setActiveView('tasks'); }}
+                className={`w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-[13px] font-medium transition group ${selectedTagId === tag.id ? 'bg-indigo-50 text-indigo-700' : 'text-[#666] hover:bg-[#F1F1F1]'}`}>
+                <div className="flex items-center gap-3">
+                  <div className="w-2 h-2 rounded-full" style={{ backgroundColor: tag.color || '#cbd5e1' }}></div>
+                  <span className="truncate">{tag.name}</span>
+                </div>
+                <span className="text-[11px] text-slate-400 font-normal">{tasks.filter(t => t.tags && t.tags.some(tt => tt.id === tag.id) && !t.is_completed).length || ''}</span>
+                <button onClick={(e) => deleteTag(e, tag.id)} className={`hidden group-hover:block transition-colors text-slate-300 hover:text-red-500 text-[10px] ml-2`}>✕</button>
+              </button>
+            ))}
+          </div>
+        )}
+
       </div>
 
-      {/* Mini Calendar Footer */}
-      <div className="p-4 bg-[#F9F9F9] border-t border-slate-100">
-        <div className="grid grid-cols-7 gap-1 text-center">
-          {days.map(d => <span key={d} className="text-[9px] font-bold text-slate-400 uppercase">{d}</span>)}
-          {[29, 30, 31, 1, 2, 3, 4].map(day => (
-            <div key={day} className="flex flex-col items-center pt-2">
-              <span className={`text-[11px] font-medium w-6 h-6 flex items-center justify-center rounded-full transition ${day === today ? 'bg-[#E8EEF8] text-[#5588DD] ring-1 ring-inset ring-[#5588DD]/20' : 'text-slate-600'}`}>
-                {day}
-              </span>
-              <div className={`w-1 h-1 rounded-full mt-1 ${day === today ? 'bg-[#5588DD]' : 'transparent'}`}></div>
-            </div>
-          ))}
+      {/* AI Assistant Chat Input */}
+      <div className="p-4 border-t border-slate-100 bg-white">
+        <div className="relative group">
+          <input
+            type="text"
+            placeholder="Спросить ИИ..."
+            className="w-full pl-3 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-[13px] focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all placeholder:text-slate-400"
+          />
+          <button className="absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center bg-indigo-600 text-white rounded-lg opacity-80 hover:opacity-100 transition shadow-sm">
+            <span className="text-[10px]">✨</span>
+          </button>
         </div>
+        <p className="text-[9px] text-slate-400 mt-2 px-1 text-center font-medium uppercase tracking-tight opacity-60">Smart Assistant Beta</p>
       </div>
     </div>
   )
@@ -603,6 +639,7 @@ function App() {
   const [allLists, setAllLists] = useState([])
   const [allFolders, setAllFolders] = useState([])
   const [loading, setLoading] = useState(true)
+  const [dropPosition, setDropPosition] = useState(null) // 'top' | 'bottom'
   const [isSaving, setIsSaving] = useState(false)
   const lastFetchedTasksJson = useRef('')
 
@@ -619,10 +656,22 @@ function App() {
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [modalMode, setModalMode] = useState('create')
   const [currentTaskId, setCurrentTaskId] = useState(null)
+  const datePickerRef = useRef(null)
+  const datePickerBtnRef = useRef(null)
+  const tagSelectBtnRef = useRef(null)
+  const projectSelectRef = useRef(null)
+  const projectSelectBtnRef = useRef(null)
+
+  const [showDatePicker, setShowDatePicker] = useState(false)
+  const [showEndDatePicker, setShowEndDatePicker] = useState(false)
+  const [showProjectSelect, setShowProjectSelect] = useState(false)
+  const [showTagSelect, setShowTagSelect] = useState(false)
+
+
 
   // Состояния сайдбара
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
-  const [isPanelOpen, setIsPanelOpen] = useState(false)
+  const [isPanelOpen, setIsPanelOpen] = useState(window.innerWidth >= 1024)
   const [collapsedFolders, setCollapsedFolders] = useState({})
 
   // Состояния для создания папок/списков
@@ -633,6 +682,7 @@ function App() {
   const [newTagName, setNewTagName] = useState('')
   const [hoveredListId, setHoveredListId] = useState(null)
   const [dragOverListInfo, setDragOverListInfo] = useState(null) // { id, position: 'top' | 'bottom' }
+  const [dragOverFolderInfo, setDragOverFolderInfo] = useState(null) // { id, position: 'top' | 'bottom' }
   const [dragOverTaskId, setDragOverTaskId] = useState(null)
   const [draggedTaskId, setDraggedTaskId] = useState(null)
   const [swipeTaskId, setSwipeTaskId] = useState(null)
@@ -640,10 +690,13 @@ function App() {
   const swipeStartX = useRef(0)
 
   // Ширина панелей
-  const [sidebarWidth, setSidebarWidth] = useState(280)
-  const [panelWidth, setPanelWidth] = useState(400)
+  const [sidebarWidth, setSidebarWidth] = useState(window.innerWidth * 0.15)
+  const [panelWidth, setPanelWidth] = useState(window.innerWidth * 0.35)
   const isResizingSidebar = useRef(false)
-  const isResizingPanel = useRef(false)
+  const isResizingPanel = useRef(false) // Task Detail Panel
+  const isResizingCalendar = useRef(false) // Calendar Panel
+  const [calendarWidth, setCalendarWidth] = useState(window.innerWidth * 0.15)
+  const [isCalendarPanelOpen, setIsCalendarPanelOpen] = useState(true) // Always open on start as requested
 
   // Resizing Tasks
   const [resizingTaskState, setResizingTaskState] = useState(null) // { id, startY, originalDuration, currentDuration }
@@ -821,11 +874,9 @@ function App() {
   const [duration, setDuration] = useState(60)
   const [listId, setListId] = useState(null)
   const [selectedTags, setSelectedTags] = useState([])
+  const [editingTaskId, setEditingTaskId] = useState(null) // Inline edit
 
-  const [showDatePicker, setShowDatePicker] = useState(false)
-  const [showEndDatePicker, setShowEndDatePicker] = useState(false)
-  const [showProjectSelect, setShowProjectSelect] = useState(false)
-  const [showTagSelect, setShowTagSelect] = useState(false)
+
 
   // Состояния для жеста закрытия
   const [dragOffset, setDragOffset] = useState(0)
@@ -854,7 +905,8 @@ function App() {
         supabase
           .from('tasks')
           .select('*, tags:task_tags(tag_id, tags(*))')
-          .order('id', { ascending: false })
+          .order('order_index', { ascending: true }) // Primary Sort
+          .order('id', { ascending: false }) // Secondary Sort
       ])
 
       if (tagsRes.data) setAllTags(tagsRes.data)
@@ -1003,35 +1055,51 @@ function App() {
   const autoSave = useCallback(async () => {
     if (!currentTaskId || !title.trim()) return
     setIsSaving(true)
-    let finalDate = null
-    let finalEndDate = null
 
-    if (dueDate) {
-      if (dueTime) {
-        // Construct local datetime string and convert to ISO for UTC storage
-        const localDateTimeStr = `${dueDate}T${dueTime}:00`
-        finalDate = new Date(localDateTimeStr).toISOString()
+    // Prepare separate Date and Time values
+    let finalDueDate = dueDate || null
+    let finalDueTime = null
+    let finalEndDate = endDate || dueDate || null
+    let finalEndTime = null
 
-        if (dueTimeEnd) {
-          const localEndDateTimeStr = `${dueDate}T${dueTimeEnd}:00`
-          finalEndDate = new Date(localEndDateTimeStr).toISOString()
-        } else if (duration) {
-          const d = new Date(localDateTimeStr)
-          const de = new Date(d.getTime() + duration * 60000)
-          finalEndDate = de.toISOString()
-        }
+    if (dueDate && dueTime) {
+      finalDueTime = `${dueTime}:00`
+
+      // Calculate End Time if needed
+      if (dueTimeEnd) {
+        finalEndTime = `${dueTimeEnd}:00`
+        if (endDate) finalEndDate = endDate
+      } else if (duration) {
+        const start = new Date(`${dueDate}T${dueTime}`)
+        const end = new Date(start.getTime() + duration * 60000)
+        finalEndTime = format(end, 'HH:mm:ss')
+        finalEndDate = format(end, 'yyyy-MM-dd')
       } else {
-        // All-day task, store as date string (Supabase will treat as UTC midnight)
-        finalDate = dueDate
+        // Default to +1 hour if no end/duration set? 
+        // Or leave null? User said "either one or other". 
+        // If duration is NOT set, maybe we shouldn't force an interval?
+        // But Calendar view NEEDS an interval. Let's default to 1h for consistency if just time is picked.
+        const start = new Date(`${dueDate}T${dueTime}`)
+        const end = new Date(start.getTime() + 60 * 60000) // Default 1h
+        finalEndTime = format(end, 'HH:mm:ss')
+        finalEndDate = format(end, 'yyyy-MM-dd')
       }
+    } else if (dueDate) {
+      // All-day
+      finalDueTime = null
+      finalEndTime = null
+      finalEndDate = dueDate
     }
+
     const taskData = {
       title,
       description: description || '',
       subtasks,
       priority: priority || 'low',
-      due_date: finalDate,
+      due_date: finalDueDate,
+      due_time: finalDueTime,
       end_date: finalEndDate,
+      end_time: finalEndTime,
       list_id: listId
     }
 
@@ -1039,10 +1107,6 @@ function App() {
       const { error: updateError } = await supabase.from('tasks').update(taskData).eq('id', currentTaskId)
       if (updateError) {
         console.error('AutoSave update failed:', updateError)
-        // Fallback: update without end_date if it failed
-        const { end_date, ...fallbackTaskData } = taskData
-        const { error: fallbackError } = await supabase.from('tasks').update(fallbackTaskData).eq('id', currentTaskId)
-        if (fallbackError) console.error('AutoSave fallback update failed:', fallbackError)
       }
 
       const { error: deleteTagsError } = await supabase.from('task_tags').delete().eq('task_id', currentTaskId)
@@ -1063,6 +1127,37 @@ function App() {
   useEffect(() => {
     if ((isModalOpen || isPanelOpen) && modalMode === 'edit') autoSave()
   }, [debouncedTitle, debouncedDescription, debouncedPriority, debouncedDueDate, debouncedDueTime, debouncedDueTimeEnd, debouncedDuration, debouncedTags, debouncedListId])
+
+  // --- SYNC LOCAL STATE WITH TASKS (ONLY ON TASK SWITCH OR EXTERNAL UPDATE) ---
+  useEffect(() => {
+    if ((isModalOpen || isPanelOpen) && currentTaskId) {
+      const task = tasks.find(t => t.id === currentTaskId)
+      if (task) {
+        const taskDueDate = task.due_date || ''
+        const taskEndDate = task.end_date || task.due_date || ''
+        const taskDueTime = task.due_time ? task.due_time.substring(0, 5) : ''
+        const taskDueTimeEnd = task.end_time ? task.end_time.substring(0, 5) : ''
+
+        // IMPORTANT: Only sync back from the Global Tasks array if we are NOT in the middle of a local save
+        if (!isSaving) {
+          if (taskDueDate !== dueDate || taskDueTime !== dueTime || taskEndDate !== endDate || taskDueTimeEnd !== dueTimeEnd) {
+            setDueDate(taskDueDate)
+            setDueTime(taskDueTime)
+            setEndDate(taskEndDate)
+            setDueTimeEnd(taskDueTimeEnd)
+
+            if (task.due_time && task.end_time && task.due_date && task.end_date) {
+              const start = new Date(`${task.due_date}T${task.due_time}`)
+              const end = new Date(`${task.end_date}T${task.end_time}`)
+              setDuration(Math.round((end - start) / 60000))
+            } else {
+              setDuration(60)
+            }
+          }
+        }
+      }
+    }
+  }, [currentTaskId, tasks]) // Sync when task changes OR when tasks are refetched from server
 
   // --- БЛОКИРОВКА ОБНОВЛЕНИЯ И ИСТОРИЯ ---
   useEffect(() => {
@@ -1136,11 +1231,21 @@ function App() {
         setSidebarWidth(newWidth)
       }
       if (isResizingPanel.current) {
-        // ...
-        const minWidth = window.innerWidth * 0.3
-        const maxWidth = window.innerWidth * 0.6
-        const newWidth = Math.max(minWidth, Math.min(maxWidth, window.innerWidth - clientX))
+        if (e.cancelable) e.preventDefault()
+        const minWidth = 300
+        const maxWidth = 800
+        // Calculate width based on whether Calendar is also open
+        const rightOffset = isCalendarPanelOpen ? calendarWidth : 0
+        const totalRightWidth = window.innerWidth - clientX
+        const newWidth = Math.max(minWidth, Math.min(maxWidth, totalRightWidth - rightOffset))
         setPanelWidth(newWidth)
+      }
+      if (isResizingCalendar.current) {
+        if (e.cancelable) e.preventDefault()
+        const minWidth = 250
+        const maxWidth = 600
+        const newWidth = Math.max(minWidth, Math.min(maxWidth, window.innerWidth - clientX))
+        setCalendarWidth(newWidth)
       }
     }
 
@@ -1256,6 +1361,7 @@ function App() {
 
       isResizingSidebar.current = false
       isResizingPanel.current = false
+      isResizingCalendar.current = false
       document.body.style.cursor = 'default'
       document.body.style.userSelect = 'auto'
       document.body.classList.remove('resizing')
@@ -1420,6 +1526,25 @@ function App() {
     fetchData(true)
   }
 
+  // --- INLINE EDITING ---
+  const handleTaskTitleBlur = async (task, newTitle) => {
+    if (!newTitle.trim()) {
+      setEditingTaskId(null)
+      return
+    }
+    if (newTitle !== task.title) {
+      setTasks(prev => prev.map(t => t.id === task.id ? { ...t, title: newTitle } : t));
+      await supabase.from('tasks').update({ title: newTitle }).eq('id', task.id);
+    }
+    setEditingTaskId(null);
+  }
+
+  const handleTaskTitleKeyDown = (e, task) => {
+    if (e.key === 'Enter') {
+      e.target.blur();
+    }
+  }
+
   const setFormatDate = (offsetDays) => {
     const d = new Date()
     d.setDate(d.getDate() + offsetDays)
@@ -1431,7 +1556,7 @@ function App() {
     allFolders, allLists, allTags, tasks,
     selectedListId, selectedTagId, dateFilter,
     resetFilters: () => { setSelectedListId(null); setSelectedTagId(null); setDateFilter(null); },
-    setSelectedListId, setSelectedTagId, setDateFilter,
+    setSelectedListId, setSelectedTagId, setDateFilter, setActiveView, activeView,
     setIsSidebarOpen, collapsedFolders, toggleFolder: (id) => setCollapsedFolders(prev => ({ ...prev, [id]: !prev[id] })),
     setIsAddPopupOpen,
     newTagName, setNewTagName, createTag,
@@ -1457,17 +1582,136 @@ function App() {
         fetchData(true)
       }
     },
+    onDropTaskReorder: async (e, targetTaskId, position) => {
+      e.preventDefault();
+      const draggedTaskId = e.dataTransfer.getData('taskId');
+      if (!draggedTaskId || String(draggedTaskId) === String(targetTaskId)) return;
+
+      // 1. Identification of the context (filteredTasks) is crucial.
+      // We should reorder within the CURRENT VIEW (filteredTasks).
+      // However, filteredTasks isn't directly available in this scope easily without prop drilling or using state.
+      // But we have 'tasks' state and we know the 'filteredTasks' logic is derived.
+      // Better to re-index specifically the siblings that share the same List/Context.
+
+      const draggedTask = tasks.find(t => String(t.id) === String(draggedTaskId));
+      const targetTask = tasks.find(t => String(t.id) === String(targetTaskId));
+      if (!targetTask || !draggedTask) return;
+
+      // Identify Siblings scope:
+      // If in a List -> list_id must match.
+      // If in Inbox -> list_id is null.
+      // If in Smart List (Today/Tomorrow) -> Date matches?
+      // Reordering usually only makes sense within a static List context (Project or Inbox).
+      // If user drops in 'Today' view, what does it mean? Order for today?
+      // Let's assume reordering affects the 'order_index' globally, but we only re-index siblings sharing the same list_id.
+      // If list_id differs (dragging to another list), that's handled by onDropTask, not Reorder.
+
+      if (draggedTask.list_id !== targetTask.list_id) {
+        // Fallback if somehow drag-n-drop reorder was triggered across lists (unlikely with current UI)
+        return;
+      }
+
+      const scopeListId = targetTask.list_id;
+
+      // Get siblings, sorted by current order
+      const siblings = tasks
+        .filter(t => t.list_id === scopeListId && !t.is_completed) // Reorder only active tasks usually
+        .sort((a, b) => (a.order_index || 0) - (b.order_index || 0) || b.id - a.id);
+
+      const dragIdx = siblings.findIndex(t => String(t.id) === String(draggedTaskId));
+      const targetIdx = siblings.findIndex(t => String(t.id) === String(targetTaskId));
+
+      if (targetIdx === -1) return;
+
+      // Remove dragged from array
+      const newSiblings = siblings.filter(t => String(t.id) !== String(draggedTaskId));
+
+      // Calculate insert index
+      let insertIndex = targetIdx;
+      // If we removed the item from *before* the target, the target index shifted down by 1. 
+      // But 'newSiblings' already has it removed.
+      // We need to find the index of target in 'newSiblings'.
+      const newTargetIndex = newSiblings.findIndex(t => String(t.id) === String(targetTaskId));
+
+      if (position === 'bottom') {
+        insertIndex = newTargetIndex + 1;
+      } else {
+        insertIndex = newTargetIndex;
+      }
+
+      newSiblings.splice(insertIndex, 0, draggedTask);
+
+      // Re-index logic
+      const updates = [];
+      const newTasks = tasks.map(t => {
+        const inScope = newSiblings.find(s => String(s.id) === String(t.id));
+        if (inScope) {
+          const idx = newSiblings.findIndex(s => String(s.id) === String(t.id));
+          const newOrder = (idx + 1) * 10000;
+          if (t.order_index !== newOrder) {
+            updates.push({ id: t.id, order_index: newOrder });
+          }
+          return { ...t, order_index: newOrder };
+        }
+        return t;
+      });
+
+      // Optimistic Update
+      setTasks(newTasks.sort((a, b) => (a.order_index || 0) - (b.order_index || 0) || b.id - a.id));
+
+      if (updates.length > 0) {
+        // Prepare batch update? Supabase doesn't strictly support large batch updates in one call easily without RPC.
+        // But for <100 tasks it's okay to Promise.all or use upsert.
+        // Upsert is better.
+        const { error } = await supabase.from('tasks').upsert(updates.map(u => ({ id: u.id, order_index: u.order_index })));
+        if (error) console.error('Reorder failed:', error);
+      }
+      fetchData(true);
+    },
+    dragOverTaskId, setDragOverTaskId,
+    dropPosition, setDropPosition,
     onDragStartFolder: (e, id) => {
-      e.dataTransfer.setData('folderId', id)
+      e.dataTransfer.setData('folderId', String(id))
       e.dataTransfer.effectAllowed = 'move'
     },
-    onDropFolderSorting: async (e, targetId) => {
+    onDropFolderSorting: async (e, targetId, position = 'bottom') => {
       e.preventDefault()
       const draggedId = e.dataTransfer.getData('folderId')
-      if (!draggedId || draggedId === targetId) return
-      const targetFolder = allFolders.find(f => f.id === targetId)
-      const newOrder = (targetFolder?.order_index || 0) + 1
-      await supabase.from('folders').update({ order_index: newOrder }).eq('id', draggedId)
+      if (!draggedId || String(draggedId) === String(targetId)) return
+
+      const allFoldersSorted = [...allFolders].sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
+      const draggedFolder = allFoldersSorted.find(f => String(f.id) === String(draggedId));
+      if (!draggedFolder) return;
+
+      const siblings = allFoldersSorted.filter(f => String(f.id) !== String(draggedId));
+      const targetIndex = siblings.findIndex(f => String(f.id) === String(targetId));
+      if (targetIndex === -1) return;
+
+      let insertIndex = targetIndex;
+      if (position === 'bottom') insertIndex = targetIndex + 1;
+
+      const newSiblings = [...siblings];
+      newSiblings.splice(insertIndex, 0, draggedFolder);
+
+      const updates = [];
+      const newFolders = allFolders.map(f => {
+        const inNewOrder = newSiblings.find(s => String(s.id) === String(f.id));
+        if (inNewOrder) {
+          const idx = newSiblings.findIndex(s => String(s.id) === String(f.id));
+          const newOrderIndex = (idx + 1) * 10000;
+          if (f.order_index !== newOrderIndex) {
+            updates.push({ id: f.id, order_index: newOrderIndex });
+          }
+          return { ...f, order_index: newOrderIndex };
+        }
+        return f;
+      });
+
+      setAllFolders(newFolders.sort((a, b) => (a.order_index || 0) - (b.order_index || 0)));
+
+      if (updates.length > 0) {
+        await Promise.all(updates.map(u => supabase.from('folders').update({ order_index: u.order_index }).eq('id', u.id)));
+      }
       fetchData(true)
     },
     onDragStartList: (e, id) => {
@@ -1480,27 +1724,57 @@ function App() {
       const draggedId = e.dataTransfer.getData('listIdForSort')
       if (!draggedId || String(draggedId) === String(targetId)) return
 
+      const draggedList = allLists.find(l => String(l.id) === String(draggedId))
       const targetList = allLists.find(l => String(l.id) === String(targetId))
-      if (!targetList) return
+      if (!draggedList || !targetList) return
 
-      let newOrder = targetList.order_index || 0
-      if (position === 'top') {
-        newOrder = newOrder - 0.5
-      } else {
-        newOrder = newOrder + 0.5
-      }
+      const targetFolderId = targetList.folder_id
 
-      // Optimistic update
-      setAllLists(prev => {
-        const newList = prev.map(l => String(l.id) === String(draggedId) ? { ...l, order_index: newOrder, folder_id: targetList.folder_id } : l)
-        return newList.sort((a, b) => (a.order_index || 0) - (b.order_index || 0))
+      // Filter siblings in the same folder (or root) and sort them by current order
+      const siblings = allLists
+        .filter(l => l.folder_id === targetFolderId && String(l.id) !== String(draggedId))
+        .sort((a, b) => (a.order_index || 0) - (b.order_index || 0))
+
+      const targetIndex = siblings.findIndex(l => String(l.id) === String(targetId))
+      if (targetIndex === -1) return
+
+      let insertIndex = targetIndex
+      if (position === 'bottom') insertIndex = targetIndex + 1
+
+      const newSiblings = [...siblings]
+      const updatedDraggedList = { ...draggedList, folder_id: targetFolderId }
+      newSiblings.splice(insertIndex, 0, updatedDraggedList)
+
+      const updates = []
+      const newAllLists = allLists.map(l => {
+        const inNewOrder = newSiblings.find(s => String(s.id) === String(l.id))
+        if (inNewOrder) {
+          const idx = newSiblings.findIndex(s => String(s.id) === String(l.id))
+          const newOrderIndex = (idx + 1) * 10000
+
+          if (l.order_index !== newOrderIndex || l.folder_id !== targetFolderId) {
+            updates.push({ id: l.id, order_index: newOrderIndex, folder_id: targetFolderId })
+          }
+          return { ...l, order_index: newOrderIndex, folder_id: targetFolderId }
+        }
+        return l
       })
+
+      setAllLists(newAllLists.sort((a, b) => (a.order_index || 0) - (b.order_index || 0)))
+
+      if (updates.length > 0) {
+        await Promise.all(updates.map(u =>
+          supabase.from('lists').update({ order_index: u.order_index, folder_id: u.folder_id }).eq('id', u.id)
+        ))
+      }
+      fetchData(true)
 
       await supabase.from('lists').update({ order_index: newOrder, folder_id: targetList.folder_id }).eq('id', draggedId)
       fetchData(true)
     },
     hoveredListId, setHoveredListId,
     dragOverListInfo, setDragOverListInfo,
+    dragOverFolderInfo, setDragOverFolderInfo,
     fetchData
   }
 
@@ -1517,33 +1791,18 @@ function App() {
   })
 
   return (
-    <div className="h-screen bg-white flex font-sans text-[#333] overflow-hidden selection:bg-indigo-100">
-
-      {/* NARROW NAV BAR */}
-      <nav className="hidden md:flex w-16 flex-shrink-0 bg-black flex-col items-center py-6 gap-6 z-[70]">
+    <div className="h-screen bg-white flex font-sans text-[#333] overflow-hidden selection:bg-indigo-100 relative">
+      {!isCalendarPanelOpen && (
         <button
-          onClick={() => setActiveView('tasks')}
-          className={`w-10 h-10 flex items-center justify-center rounded-xl transition-all ${activeView === 'tasks' ? 'bg-white text-black shadow-lg scale-110' : 'text-white/40 hover:text-white hover:bg-white/10'}`}
-          title="Задачи"
+          onClick={() => setIsCalendarPanelOpen(true)}
+          className="hidden lg:flex fixed top-4 right-4 w-10 h-10 flex-col justify-center items-center gap-1 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl transition shadow-lg group z-[100]"
+          title="Открыть расписание"
         >
-          <span className="text-xl">📋</span>
+          <div className="w-5 h-0.5 bg-slate-400 group-hover:bg-indigo-500 transition-colors rounded-full"></div>
+          <div className="w-5 h-0.5 bg-slate-400 group-hover:bg-indigo-500 transition-colors rounded-full"></div>
+          <div className="w-5 h-0.5 bg-slate-400 group-hover:bg-indigo-500 transition-colors rounded-full"></div>
         </button>
-        <button
-          onClick={() => setActiveView('calendar')}
-          className={`w-10 h-10 flex items-center justify-center rounded-xl transition-all ${activeView === 'calendar' ? 'bg-white text-black shadow-lg scale-110' : 'text-white/40 hover:text-white hover:bg-white/10'}`}
-          title="Календарь"
-        >
-          <span className="text-xl">📅</span>
-        </button>
-        <div className="mt-auto flex flex-col gap-4">
-          <button className="w-10 h-10 flex items-center justify-center rounded-full bg-indigo-600 text-white hover:bg-indigo-500 transition-colors shadow-lg">
-            <span className="text-lg">⚙️</span>
-          </button>
-          <div className="w-10 h-10 rounded-full bg-slate-800 border border-white/10 overflow-hidden">
-            <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Lucky" alt="User" />
-          </div>
-        </div>
-      </nav>
+      )}
 
       {/* SIDEBAR - DESKTOP */}
       <aside
@@ -1571,7 +1830,7 @@ function App() {
       {isSidebarOpen && <div className="fixed inset-0 bg-black/10 backdrop-blur-[2px] z-[55] md:hidden" onClick={() => setIsSidebarOpen(false)}></div>}
 
       {/* MAIN VIEW */}
-      <main className="flex-1 h-full flex flex-col items-stretch overflow-hidden">
+      <main className="flex-1 h-full flex flex-col items-stretch overflow-hidden relative">
         <div className={`${activeView === 'calendar' ? 'max-w-none p-0' : 'max-w-4xl p-4 md:p-8'} w-full mx-auto md:mx-0 flex flex-col flex-1 transition-all duration-500 overflow-hidden`}>
           <header className={`flex justify-between items-center ${activeView === 'calendar' ? 'px-6 py-2 border-b border-slate-50' : 'mb-6'} gap-2`}>
             <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -1659,12 +1918,7 @@ function App() {
                       const taskId = e.dataTransfer.getData('taskId');
                       if (taskId) onRemoveParent(taskId);
                     }}>
-                    {/* Helper for dragging out */}
-                    <div className={`mb-4 rounded-xl border-2 border-dashed transition-all duration-300 flex items-center justify-center overflow-hidden shrink-0 ${draggedTaskId ? 'h-16 border-indigo-300 bg-indigo-50/50' : 'h-0 border-transparent opacity-0'}`}>
-                      <span className="text-[11px] text-indigo-500 uppercase font-black tracking-widest">
-                        ↴ Вывести из подзадач
-                      </span>
-                    </div>
+
                     {filteredTasks.filter(t => {
                       // Show as top-level if it has no parent OR its parent is not in the filtered list
                       if (!t.parent_id) return true
@@ -1672,67 +1926,104 @@ function App() {
                     }).map(task => (
                       <div key={task.id}>
                         <div
-                          draggable="true"
-                          onDragStart={(e) => {
-                            e.dataTransfer.setData('taskId', task.id);
-                            e.dataTransfer.effectAllowed = 'move';
-                            e.currentTarget.classList.add('opacity-30');
-                            setDraggedTaskId(task.id);
-                          }}
-                          onDragEnd={(e) => {
-                            e.currentTarget.classList.remove('opacity-30');
-                            setDraggedTaskId(null);
-                          }}
-                          onDragOver={e => {
-                            e.preventDefault();
-                            if (draggedTaskId && String(draggedTaskId) !== String(task.id)) {
-                              setDragOverTaskId(task.id);
-                            }
-                          }}
-                          onDragLeave={() => setDragOverTaskId(null)}
-                          onDrop={e => {
-                            e.stopPropagation();
-                            setDragOverTaskId(null);
-                            const draggedId = e.dataTransfer.getData('taskId');
-                            if (draggedId) onDropTaskOnTask(draggedId, task.id);
-                          }}
-                          onTouchStart={(e) => handleTaskTouchStart(e, task.id)}
-                          onTouchMove={(e) => handleTaskTouchMove(e, task.id)}
-                          onTouchEnd={() => handleTaskTouchEnd(task.id)}
-                          onClick={(e) => {
-                            // Desktop: single click opens panel, double click opens modal
-                            if (window.innerWidth >= 1024) {
-                              openTaskDetail(task, 'panel');
-                            } else {
-                              // Mobile: always modal
-                              openTaskDetail(task, 'modal');
-                            }
-                          }}
-                          onDoubleClick={(e) => {
-                            if (window.innerWidth >= 1024) {
-                              openTaskDetail(task, 'modal');
-                            }
-                          }}
                           style={{
                             transform: swipeTaskId === task.id ? `translateX(${swipeOffset}px)` : 'none',
                             transition: swipeTaskId === task.id ? 'none' : 'transform 0.2s ease-out'
                           }}
-                          className={`group flex items-start gap-3 py-3 border-b border-slate-50 cursor-pointer hover:bg-slate-50/50 transition-all ${dragOverTaskId === task.id ? 'bg-indigo-50/50 ring-2 ring-indigo-500 ring-inset shadow-md' : ''}`}
+                          className={`group flex items-start gap-3 py-3 border-b border-slate-50 transition-all 
+                                ${dragOverTaskId === task.id ? (dropPosition === 'top' ? 'border-t-2 border-t-indigo-500' : 'border-b-2 border-b-indigo-500') : ''}  
+                          `}
+                          onClick={(e) => {
+                            if (window.innerWidth >= 1024) return; // Desktop: managed by inline/button
+                            // Mobile: open modal if not clicking controls
+                            openTaskDetail(task, 'modal');
+                          }}
                         >
+                          {/* Drag Handle */}
+                          <div
+                            draggable="true"
+                            className={`opacity-0 group-hover:opacity-100 text-slate-300 hover:text-slate-500 transition px-2 w-6 select-none flex items-center justify-center h-full pt-1 
+                               ${draggedTaskId && String(draggedTaskId) !== String(task.id) ? 'pointer-events-none' : 'cursor-grab active:cursor-grabbing'}
+                             `}
+                            onDragStart={(e) => {
+                              e.dataTransfer.setData('taskId', task.id);
+                              e.dataTransfer.effectAllowed = 'move';
+                              setDraggedTaskId(task.id);
+                            }}
+                            onDragEnd={(e) => {
+                              setDraggedTaskId(null);
+                            }}
+                          >⋮⋮</div>
+
                           <div onClick={(e) => { e.stopPropagation(); toggleTask(task.id, task.is_completed); }}
-                            className={`mt-1 w-5 h-5 rounded border transition-all duration-200 shrink-0 flex items-center justify-center ${task.is_completed ? 'bg-slate-200 border-slate-200' : 'border-slate-300 hover:border-slate-500'}`}>
+                            className={`mt-1 w-5 h-5 rounded border transition-all duration-200 shrink-0 flex items-center justify-center cursor-pointer ${task.is_completed ? 'bg-slate-200 border-slate-200' : 'border-slate-300 hover:border-slate-500'}`}>
                             {task.is_completed && <span className="text-[#666] text-[10px] font-bold">✓</span>}
                           </div>
-                          <div className="flex-1 min-w-0">
-                            <p className={`text-[15px] leading-tight transition ${task.is_completed ? 'line-through text-slate-400' : 'text-[#333]'}`}>
-                              {task.title.match(/https?:\/\/[^\s]+/) ? (
-                                <span dangerouslySetInnerHTML={{
-                                  __html: task.title.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" class="text-indigo-600 hover:underline" onclick="event.stopPropagation()">$1</a>')
-                                }} />
-                              ) : task.title}
-                            </p>
+
+                          <div className="flex-1 min-w-0"
+                            draggable="true" // Allow dragging body too if needed, but per request better on handle. Let's keep body drag OFF for text selectability unless mobile.
+                            onDragStart={(e) => {
+                              // Optional: Allow body drag too? User specifically asked for handle to enable drag. 
+                              // Let's Disable body drag to allow text selection more easily, OR keep it but use handle for primary.
+                              // If user wants valid text selection, body sort-drag is annoying.
+                              if (window.innerWidth < 1024) { // Mobile drag logic usually Long Press
+                                // Default mobile logic
+                              } else {
+                                e.preventDefault(); // Disable drag on body for Desktop to allow text select/click
+                              }
+                            }}
+                            // Drag Target Logic needs to remain on the container or handle?
+                            // Actually the DROP ZONE is the ROW.
+                            onDragOver={e => {
+                              e.preventDefault();
+                              if (draggedTaskId && String(draggedTaskId) !== String(task.id)) {
+                                const rect = e.currentTarget.parentElement.getBoundingClientRect(); // Use Row Rect
+                                const y = e.clientY - rect.top;
+                                const isTop = y < rect.height / 2;
+                                setDragOverTaskId(task.id);
+                              }
+                            }}
+                            onDrop={e => {
+                              e.stopPropagation();
+                              const draggedId = e.dataTransfer.getData('taskId');
+                              if (draggedId && dragOverTaskId && dropPosition) {
+                                sidebarProps.onDropTaskReorder(e, dragOverTaskId, dropPosition);
+                              } else if (draggedId) {
+                                onDropTaskOnTask(draggedId, task.id);
+                              }
+                              setDragOverTaskId(null);
+                              setDropPosition(null);
+                            }}
+                          >
+                            {editingTaskId === task.id ? (
+                              <input
+                                autoFocus
+                                className="w-full bg-transparent border-none outline-none p-0 text-[15px] leading-tight font-sans text-slate-700"
+                                defaultValue={task.title}
+                                onFocus={() => openTaskDetail(task, 'panel')}
+                                onBlur={(e) => handleTaskTitleBlur(task, e.target.value)}
+                                onKeyDown={(e) => handleTaskTitleKeyDown(e, task)}
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                            ) : (
+                              <p
+                                className={`text-[15px] leading-tight transition cursor-text ${task.is_completed ? 'line-through text-slate-400' : 'text-[#333]'}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingTaskId(task.id);
+                                  openTaskDetail(task, 'panel');
+                                }}
+                              >
+                                {task.title.match(/https?:\/\/[^\s]+/) ? (
+                                  <span dangerouslySetInnerHTML={{
+                                    __html: task.title.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" class="text-indigo-600 hover:underline" onclick="event.stopPropagation()">$1</a>')
+                                  }} />
+                                ) : task.title}
+                              </p>
+                            )}
+
                             {(task.due_date || (task.tags && task.tags.length > 0)) && (
-                              <div className="flex flex-wrap gap-2 mt-1 text-[11px] font-medium text-slate-400">
+                              <div className="flex flex-wrap gap-2 mt-1 text-[11px] font-medium text-slate-400 cursor-pointer" onClick={() => openTaskDetail(task, 'panel')}>
                                 {task.due_date && <span>📅 {new Date(task.due_date).toLocaleDateString()}</span>}
                                 {task.tags?.map(t => <span key={t.id} className="text-slate-300">#{t.name}</span>)}
                               </div>
@@ -1740,53 +2031,95 @@ function App() {
                           </div>
                         </div>
                         {/* Render Subtasks ONLY if they are active in the current filter */}
-                        {filteredTasks.filter(st => st.parent_id === task.id).map(subtask => (
-                          <div key={subtask.id}
-                            draggable="true"
-                            onDragStart={(e) => {
-                              e.dataTransfer.setData('taskId', subtask.id);
-                              e.dataTransfer.effectAllowed = 'move';
-                              e.currentTarget.classList.add('opacity-30');
-                              setDraggedTaskId(subtask.id);
-                            }}
-                            onDragEnd={(e) => {
-                              e.currentTarget.classList.remove('opacity-30');
-                              setDraggedTaskId(null);
-                            }}
-                            onTouchStart={(e) => handleTaskTouchStart(e, subtask.id)}
-                            onTouchMove={(e) => handleTaskTouchMove(e, subtask.id)}
-                            onTouchEnd={() => handleTaskTouchEnd(subtask.id)}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (window.innerWidth >= 1024) {
-                                openTaskDetail(subtask, 'panel');
-                              } else {
-                                openTaskDetail(subtask, 'modal');
-                              }
-                            }}
-                            onDoubleClick={(e) => {
-                              e.stopPropagation();
-                              if (window.innerWidth >= 1024) {
-                                openTaskDetail(subtask, 'modal');
-                              }
-                            }}
-                            style={{
-                              transform: swipeTaskId === subtask.id ? `translateX(${swipeOffset}px)` : 'none',
-                              transition: swipeTaskId === subtask.id ? 'none' : 'transform 0.2s ease-out'
-                            }}
-                            className="group flex items-start gap-3 py-2 border-b border-slate-50/50 cursor-pointer hover:bg-slate-50/30 transition-colors ml-8"
-                          >
-                            <div onClick={(e) => { e.stopPropagation(); toggleTask(subtask.id, subtask.is_completed); }}
-                              className={`mt-0.5 w-4 h-4 rounded border transition-all duration-200 shrink-0 flex items-center justify-center ${subtask.is_completed ? 'bg-slate-100 border-slate-100' : 'border-slate-200 hover:border-slate-400'}`}>
-                              {subtask.is_completed && <span className="text-slate-400 text-[8px] font-bold">✓</span>}
+                        {
+                          filteredTasks.filter(st => st.parent_id === task.id).map(subtask => (
+                            <div key={subtask.id}
+                              draggable="true"
+                              onDragStart={(e) => {
+                                e.dataTransfer.setData('taskId', subtask.id);
+                                e.dataTransfer.effectAllowed = 'move';
+                                e.currentTarget.classList.add('opacity-30');
+                                setDraggedTaskId(subtask.id);
+                              }}
+                              onDragEnd={(e) => {
+                                e.currentTarget.classList.remove('opacity-30');
+                                setDraggedTaskId(null);
+                              }}
+                              onTouchStart={(e) => handleTaskTouchStart(e, subtask.id)}
+                              onTouchMove={(e) => handleTaskTouchMove(e, subtask.id)}
+                              onTouchEnd={() => handleTaskTouchEnd(subtask.id)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (window.innerWidth >= 1024) {
+                                  openTaskDetail(subtask, 'panel');
+                                } else {
+                                  openTaskDetail(subtask, 'modal');
+                                }
+                              }}
+                              onDoubleClick={(e) => {
+                                e.stopPropagation();
+                                if (window.innerWidth >= 1024) {
+                                  openTaskDetail(subtask, 'modal');
+                                }
+                              }}
+                              style={{
+                                transform: swipeTaskId === subtask.id ? `translateX(${swipeOffset}px)` : 'none',
+                                transition: swipeTaskId === subtask.id ? 'none' : 'transform 0.2s ease-out'
+                              }}
+                              className={`group flex items-start gap-2 py-2 border-b border-slate-50/50 cursor-pointer hover:bg-slate-50/30 transition-colors ml-8
+                                ${dragOverTaskId === subtask.id ? (dropPosition === 'top' ? 'border-t-2 border-t-indigo-500' : 'border-b-2 border-b-indigo-500') : ''}  
+                              `}
+                              onDragOver={e => {
+                                e.preventDefault();
+                                if (draggedTaskId && String(draggedTaskId) !== String(subtask.id)) {
+                                  const rect = e.currentTarget.getBoundingClientRect();
+                                  const y = e.clientY - rect.top;
+                                  const isTop = y < rect.height / 2;
+                                  setDragOverTaskId(subtask.id);
+                                  setDropPosition(isTop ? 'top' : 'bottom');
+                                }
+                              }}
+                              onDrop={e => {
+                                e.stopPropagation();
+                                const draggedId = e.dataTransfer.getData('taskId');
+                                if (draggedId && dragOverTaskId && dropPosition) {
+                                  sidebarProps.onDropTaskReorder(e, dragOverTaskId, dropPosition);
+                                } else if (draggedId) {
+                                  onDropTaskOnTask(draggedId, subtask.id);
+                                }
+                                setDragOverTaskId(null);
+                                setDropPosition(null);
+                              }}
+                            >
+                              {/* Drag Handle for Subtasks */}
+                              <div
+                                draggable="true"
+                                className={`opacity-0 group-hover:opacity-100 text-slate-300 hover:text-slate-500 transition px-1 w-4 select-none flex items-center justify-center h-full pt-0.5
+                                    ${draggedTaskId && String(draggedTaskId) !== String(subtask.id) ? 'pointer-events-none' : 'cursor-grab active:cursor-grabbing'}
+                                 `}
+                                onDragStart={(e) => {
+                                  e.dataTransfer.setData('taskId', subtask.id);
+                                  e.dataTransfer.effectAllowed = 'move';
+                                  setDraggedTaskId(subtask.id);
+                                  e.stopPropagation();
+                                }}
+                                onDragEnd={() => {
+                                  setDraggedTaskId(null);
+                                }}
+                              >⋮⋮</div>
+
+                              <div onClick={(e) => { e.stopPropagation(); toggleTask(subtask.id, subtask.is_completed); }}
+                                className={`mt-0.5 w-4 h-4 rounded border transition-all duration-200 shrink-0 flex items-center justify-center ${subtask.is_completed ? 'bg-slate-100 border-slate-100' : 'border-slate-200 hover:border-slate-400'}`}>
+                                {subtask.is_completed && <span className="text-slate-400 text-[8px] font-bold">✓</span>}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className={`text-sm leading-tight transition ${subtask.is_completed ? 'line-through text-slate-300' : 'text-slate-600'}`}>
+                                  {subtask.title}
+                                </p>
+                              </div>
                             </div>
-                            <div className="flex-1 min-w-0">
-                              <p className={`text-sm leading-tight transition ${subtask.is_completed ? 'line-through text-slate-300' : 'text-slate-600'}`}>
-                                {subtask.title}
-                              </p>
-                            </div>
-                          </div>
-                        ))}
+                          ))
+                        }
                       </div>
                     ))}
                   </div>
@@ -1825,179 +2158,250 @@ function App() {
             />
           )}
         </div>
-      </main>
+      </main >
 
       {/* RIGHT PANEL - DESKTOP */}
-      {isPanelOpen && (
-        <aside
-          style={{ width: `${panelWidth}px` }}
-          className="hidden lg:flex flex-col flex-shrink-0 border-l border-slate-100 bg-white sticky top-0 h-screen overflow-hidden animate-panel group/panel"
-        >
-          {/* Resize Handle Panel */}
-          <div
-            onMouseDown={(e) => {
-              isResizingPanel.current = true
-              document.body.style.cursor = 'ew-resize'
-              document.body.style.userSelect = 'none'
-              document.body.classList.add('resizing')
-            }}
-            className="absolute top-0 left-[-4px] w-2 h-full cursor-ew-resize hover:bg-indigo-500/50 transition-colors z-50 group-hover/panel:bg-slate-200"
-          />
-          <div className="flex items-center justify-between p-6 border-b border-slate-50">
-            <h2 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Детали задачи</h2>
-            <button onClick={() => setIsPanelOpen(false)} className="text-slate-300 hover:text-black p-1 transition">✕</button>
-          </div>
+      {/* TASK DETAIL PANEL */}
+      <aside
+        style={{ width: `${panelWidth}px` }}
+        className="hidden lg:flex flex-col flex-shrink-0 border-l border-slate-100 bg-white sticky top-0 h-screen overflow-hidden animate-panel group/panel z-20 shadow-xl"
+        onClick={e => {
+          // Close DatePicker if clicking outside of it (and outside the toggle button)
+          if (showDatePicker &&
+            datePickerRef.current && !datePickerRef.current.contains(e.target) &&
+            (!datePickerBtnRef.current || !datePickerBtnRef.current.contains(e.target))) {
+            setShowDatePicker(false);
+          }
+          // Close TagSelect if clicking outside
+          if (showTagSelect &&
+            tagSelectRef.current && !tagSelectRef.current.contains(e.target) &&
+            (!tagSelectBtnRef.current || !tagSelectBtnRef.current.contains(e.target))) {
+            setShowTagSelect(false);
+          }
+          // Close ProjectSelect if clicking outside
+          if (showProjectSelect &&
+            projectSelectRef.current && !projectSelectRef.current.contains(e.target) &&
+            (!projectSelectBtnRef.current || !projectSelectBtnRef.current.contains(e.target))) {
+            setShowProjectSelect(false);
+          }
+        }}
+      >
+        {/* Resize Handle Panel */}
+        <div
+          onMouseDown={() => {
+            isResizingPanel.current = true
+            document.body.style.cursor = 'ew-resize'
+            document.body.style.userSelect = 'none'
+            document.body.classList.add('resizing')
+          }}
+          className="absolute top-0 left-[-4px] w-2 h-full cursor-ew-resize hover:bg-indigo-500/50 transition-colors z-50 group-hover/panel:bg-slate-200"
+        />
 
-          <div className="flex-1 overflow-y-auto p-8 no-scrollbar">
-            <input
-              type="text"
-              placeholder="Что нужно сделать?"
-              className="w-full text-2xl font-bold placeholder:text-slate-100 border-none focus:ring-0 p-0 mb-4 text-black outline-none bg-transparent"
-              value={title}
-              onChange={e => setTitle(e.target.value)}
-            />
+        {currentTaskId ? (
+          <>
+            <div className="flex flex-col h-full bg-white relative">
+              {/* FIXED HEADER: Title & Meta */}
+              <div className="p-6 border-b border-slate-100 flex-shrink-0 bg-white z-20 relative">
+                <div className="flex items-start gap-4">
+                  <input
+                    type="text"
+                    placeholder="Название задачи"
+                    className="flex-1 text-lg font-bold placeholder:text-slate-300 border-none focus:ring-0 p-0 text-black outline-none bg-transparent leading-tight"
+                    value={title}
+                    onChange={e => setTitle(e.target.value)}
+                  />
 
-            <textarea
-              placeholder="Детали..."
-              className="w-full text-[15px] text-slate-500 placeholder:text-slate-200 border-none focus:ring-0 p-0 resize-none h-40 outline-none mb-8 leading-relaxed bg-transparent"
-              value={description}
-              onChange={e => setDescription(e.target.value)}
-            />
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <button
+                      ref={datePickerBtnRef}
+                      onClick={() => setShowDatePicker(!showDatePicker)}
+                      className={`flex items-center gap-2 px-3 h-8 rounded-lg border transition ${dueDate ? 'bg-black border-black text-white' : 'bg-white text-slate-400 border-slate-200 hover:bg-slate-50'}`}
+                    >
+                      <span className="text-sm">🗓️</span>
+                      <span className="text-[11px] font-bold">
+                        {dueDate ? (
+                          <>
+                            {format(new Date(dueDate), 'd MMM', { locale: ru })}
+                            {dueTime && <span className="ml-1 opacity-70">в {dueTime}</span>}
+                            {dueTime && dueTimeEnd && <span className="opacity-70"> - {dueTimeEnd}</span>}
+                          </>
+                        ) : "Срок"}
+                      </span>
+                    </button>
+                    <button
+                      onClick={() => setPriority(priority === 'low' ? 'high' : 'low')}
+                      className={`flex items-center justify-center w-8 h-8 rounded-lg border transition ${priority === 'high' ? 'bg-red-50 border-red-100 text-red-600' : 'bg-white text-slate-400 border-slate-200 hover:bg-slate-50'}`}
+                      title="Приоритет"
+                    >
+                      <span className="text-sm">{priority === 'high' ? '🚩' : '🏁'}</span>
+                    </button>
+                  </div>
+                </div>
 
-            <div className="space-y-6">
-              <div className="flex gap-2">
-                <button onClick={() => setShowDatePicker(!showDatePicker)}
-                  className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border text-[11px] font-bold transition ${dueDate ? 'bg-black border-black text-white' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}>
-                  🗓️ {dueDate ? new Date(dueDate).toLocaleDateString() : "Срок"}
-                </button>
-                <button onClick={() => setPriority(priority === 'low' ? 'high' : 'low')}
-                  className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border text-[11px] font-bold transition ${priority === 'high' ? 'bg-red-50 border-red-100 text-red-600' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}>
-                  {priority === 'high' ? '🚩 Срочно' : '🏁 Обычный'}
-                </button>
+                {showDatePicker && (
+                  <div ref={datePickerRef} className="absolute top-14 right-6 z-50 animate-in fade-in zoom-in-95 duration-200 shadow-2xl rounded-xl border border-slate-100">
+                    <DatePicker
+                      dueDate={dueDate}
+                      setDueDate={setDueDate}
+                      endDate={endDate}
+                      setEndDate={setEndDate}
+                      dueTime={dueTime}
+                      setDueTime={setDueTime}
+                      dueTimeEnd={dueTimeEnd}
+                      setDueTimeEnd={setDueTimeEnd}
+                      duration={duration}
+                      setDuration={setDuration}
+                      onClose={() => setShowDatePicker(false)}
+                      onSave={autoSave}
+                    />
+                  </div>
+                )}
               </div>
 
-              {showDatePicker && (
-                <div className="p-4 bg-white rounded-2xl border border-slate-100 shadow-sm transition-all duration-300">
-                  <div className="grid grid-cols-3 gap-1 mb-4">
-                    <button onClick={() => setFormatDate(0)} className="py-2 bg-slate-50 rounded-lg text-[9px] font-bold uppercase hover:bg-black hover:text-white transition">Сегодня</button>
-                    <button onClick={() => setFormatDate(1)} className="py-2 bg-slate-50 rounded-lg text-[9px] font-bold uppercase hover:bg-black hover:text-white transition">Завтра</button>
-                    <button onClick={() => setFormatDate(7)} className="py-2 bg-slate-50 rounded-lg text-[9px] font-bold uppercase hover:bg-black hover:text-white transition">Неделя</button>
-                  </div>
-                  <div className="space-y-3">
-                    <div className="flex gap-2">
-                      <div className="flex-1">
-                        <p className="text-[8px] font-black text-slate-300 uppercase tracking-widest mb-1 ml-1">Дата начала</p>
-                        <input type="date" value={dueDate} onChange={e => { setDueDate(e.target.value); if (!endDate || e.target.value > endDate) setEndDate(e.target.value); }} className="w-full p-2 text-sm border border-slate-200 rounded-lg outline-none focus:ring-1 focus:ring-slate-300 transition" />
-                      </div>
-                      <div className="flex-1">
-                        <p className="text-[8px] font-black text-slate-300 uppercase tracking-widest mb-1 ml-1">Дата конца</p>
-                        <input type="date" value={endDate || dueDate} min={dueDate} onChange={e => setEndDate(e.target.value)} className="w-full p-2 text-sm border border-slate-200 rounded-lg outline-none focus:ring-1 focus:ring-slate-300 transition" />
-                      </div>
-                    </div>
+              {/* SCROLLABLE BODY */}
+              <div className="flex-1 overflow-y-auto p-6 no-scrollbar">
 
-                    {dueTime ? (
-                      <div className="space-y-3">
-                        <div className="flex gap-2">
-                          <div className="flex-1">
-                            <p className="text-[8px] font-black text-slate-300 uppercase tracking-widest mb-1 ml-1">Начало</p>
-                            <input type="time" value={dueTime} onChange={e => {
-                              const newTime = e.target.value
-                              if (newTime && dueTime && (dueTimeEnd || duration)) {
-                                const d1 = new Date(`2000-01-01T${dueTime}`)
-                                const d2 = new Date(`2000-01-01T${newTime}`)
-                                const diff = d2.getTime() - d1.getTime()
-                                if (dueTimeEnd) {
-                                  const endD = new Date(`2000-01-01T${dueTimeEnd}`)
-                                  const newEndD = new Date(endD.getTime() + diff)
-                                  setDueTimeEnd(format(newEndD, 'HH:mm'))
-                                }
-                              }
-                              setDueTime(newTime)
-                            }} className="w-full p-2 text-sm border border-slate-200 rounded-lg outline-none focus:ring-1 focus:ring-slate-300 transition" />
-                          </div>
-                          <div className="flex-1">
-                            <p className="text-[8px] font-black text-slate-300 uppercase tracking-widest mb-1 ml-1">Конец</p>
-                            <input type="time" value={dueTimeEnd} onChange={e => { setDueTimeEnd(e.target.value); setDuration(0); }} className="w-full p-2 text-sm border border-slate-200 rounded-lg outline-none focus:ring-1 focus:ring-slate-300 transition" />
-                          </div>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <div className="flex-1 max-w-[100px]">
-                            <p className="text-[8px] font-black text-slate-300 uppercase tracking-widest mb-1 ml-1">Длительность</p>
-                            <input type="number" value={duration} onChange={e => { setDuration(parseInt(e.target.value) || 0); setDueTimeEnd(''); }} className="w-full p-2 text-sm border border-slate-200 rounded-lg outline-none focus:ring-1 focus:ring-slate-300 transition" />
-                          </div>
-                          <button onClick={() => { setDueTime(''); setDueTimeEnd(''); }} className="text-[9px] text-red-400 font-bold uppercase hover:text-red-600 transition">Убрать время</button>
-                        </div>
+                <textarea
+                  placeholder="Детали..."
+                  className="w-full text-[15px] text-slate-500 placeholder:text-slate-200 border-none focus:ring-0 p-0 resize-none h-40 outline-none mb-8 leading-relaxed bg-transparent"
+                  value={description}
+                  onChange={e => setDescription(e.target.value)}
+                />
+
+              </div>
+
+              {/* FIXED FOOTER: Projects & Tags */}
+              <div className="p-4 border-t border-slate-100 bg-slate-50/50 flex-shrink-0 z-20">
+                <div className="flex gap-2 relative">
+                  {/* PROJECT SELECTOR */}
+                  <div className="relative">
+                    <button
+                      ref={projectSelectBtnRef}
+                      onClick={() => { setShowProjectSelect(!showProjectSelect); setShowTagSelect(false); }}
+                      className={`px-4 py-3 rounded-xl border text-[11px] font-bold transition flex items-center gap-2 ${listId ? 'bg-black border-black text-white' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}>
+                      <span>📁</span>
+                      {listId ? allLists.find(l => l.id === listId)?.name : 'Проект'}
+                      <span className="opacity-50 text-[10px] ml-1">▼</span>
+                    </button>
+
+                    {showProjectSelect && (
+                      <div
+                        ref={projectSelectRef}
+                        className="absolute bottom-full left-0 mb-2 w-64 bg-white rounded-xl shadow-2xl border border-slate-100 p-2 z-50 max-h-60 overflow-y-auto transform origin-bottom animate-in zoom-in-95 duration-200">
+                        <button onClick={() => { setListId(null); setShowProjectSelect(false); }} className="w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition flex items-center gap-2 text-slate-600">
+                          <span>📥</span> Входящие
+                        </button>
+                        {allLists.map(list => (
+                          <button key={list.id} onClick={() => { setListId(list.id); setShowProjectSelect(false); }} className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition flex items-center gap-2 ${listId === list.id ? 'bg-slate-100 text-black' : 'text-slate-600'}`}>
+                            <span>{list.name.toUpperCase().includes('ЦЕЛИ') ? '⭐' : list.name.toUpperCase().includes('КУПИТЬ') ? '🛒' : '📁'}</span>
+                            {list.name}
+                          </button>
+                        ))}
                       </div>
-                    ) : (
-                      <button onClick={() => setDueTime('09:00')} className="w-full py-2 bg-slate-50 rounded-lg text-[9px] font-bold uppercase text-slate-400 hover:bg-slate-100 transition">Добавить время</button>
+                    )}
+                  </div>
+
+                  {/* TAG SELECTOR */}
+                  <div className="relative">
+                    <button
+                      ref={tagSelectBtnRef}
+                      onClick={() => { setShowTagSelect(!showTagSelect); setShowProjectSelect(false); }}
+                      className={`px-4 py-3 rounded-xl border text-[11px] font-bold transition flex items-center gap-2 ${selectedTags && selectedTags.length > 0 ? 'bg-black border-black text-white' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}>
+                      <span>🏷️</span>
+                      {selectedTags && selectedTags.length > 0 ? `${selectedTags.length} меток` : 'Метки'}
+                      <span className="opacity-50 text-[10px] ml-1">▼</span>
+                    </button>
+
+                    {showTagSelect && (
+                      <div ref={tagSelectRef} className="absolute bottom-full left-0 mb-2 w-64 bg-white rounded-xl shadow-2xl border border-slate-100 p-2 z-50 max-h-60 overflow-y-auto transform origin-bottom animate-in zoom-in-95 duration-200">
+                        {allTags.map(tag => (
+                          <button key={tag.id}
+                            onClick={() => {
+                              const isSelected = selectedTags && selectedTags.some(t => t.id === tag.id)
+                              if (isSelected) setSelectedTags(selectedTags.filter(t => t.id !== tag.id))
+                              else setSelectedTags([...(selectedTags || []), tag])
+                            }}
+                            className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition flex items-center gap-2 mb-1 ${selectedTags && selectedTags.some(t => t.id === tag.id) ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600'}`}
+                          >
+                            <div className="w-2 h-2 rounded-full" style={{ backgroundColor: tag.color || '#cbd5e1' }}></div>
+                            {tag.name}
+                            {selectedTags && selectedTags.some(t => t.id === tag.id) && <span className="ml-auto text-[10px]">✓</span>}
+                          </button>
+                        ))}
+                      </div>
                     )}
                   </div>
                 </div>
-              )}
-
-              <div className="flex gap-2 pt-4 relative">
-                {/* PROJECT SELECTOR */}
-                <div className="relative">
-                  <button onClick={() => { setShowProjectSelect(!showProjectSelect); setShowTagSelect(false); }}
-                    className={`px-4 py-3 rounded-xl border text-[11px] font-bold transition flex items-center gap-2 ${listId ? 'bg-black border-black text-white' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}>
-                    <span>📁</span>
-                    {listId ? allLists.find(l => l.id === listId)?.name : 'Проект'}
-                    <span className="opacity-50 text-[10px] ml-1">▼</span>
-                  </button>
-
-                  {showProjectSelect && (
-                    <div className="absolute bottom-full left-0 mb-2 w-64 bg-white rounded-xl shadow-2xl border border-slate-100 p-2 z-50 max-h-60 overflow-y-auto transform origin-bottom animate-in zoom-in-95 duration-200">
-                      <button onClick={() => { setListId(null); setShowProjectSelect(false); }} className="w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition flex items-center gap-2 text-slate-600">
-                        <span>📥</span> Входящие
-                      </button>
-                      {allLists.map(list => (
-                        <button key={list.id} onClick={() => { setListId(list.id); setShowProjectSelect(false); }} className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition flex items-center gap-2 ${listId === list.id ? 'bg-slate-100 text-black' : 'text-slate-600'}`}>
-                          <span>{list.name.toUpperCase().includes('ЦЕЛИ') ? '⭐' : list.name.toUpperCase().includes('КУПИТЬ') ? '🛒' : '📁'}</span>
-                          {list.name}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* TAG SELECTOR */}
-                <div className="relative">
-                  <button onClick={() => { setShowTagSelect(!showTagSelect); setShowProjectSelect(false); }}
-                    className={`px-4 py-3 rounded-xl border text-[11px] font-bold transition flex items-center gap-2 ${selectedTags.length > 0 ? 'bg-black border-black text-white' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}>
-                    <span>🏷️</span>
-                    {selectedTags.length > 0 ? `${selectedTags.length} меток` : 'Метки'}
-                    <span className="opacity-50 text-[10px] ml-1">▼</span>
-                  </button>
-
-                  {showTagSelect && (
-                    <div className="absolute bottom-full left-0 mb-2 w-64 bg-white rounded-xl shadow-2xl border border-slate-100 p-2 z-50 max-h-60 overflow-y-auto transform origin-bottom animate-in zoom-in-95 duration-200">
-                      {allTags.map(tag => (
-                        <button key={tag.id}
-                          onClick={() => {
-                            const isSelected = selectedTags.some(t => t.id === tag.id)
-                            if (isSelected) setSelectedTags(selectedTags.filter(t => t.id !== tag.id))
-                            else setSelectedTags([...selectedTags, tag])
-                          }}
-                          className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition flex items-center gap-2 mb-1 ${selectedTags.some(t => t.id === tag.id) ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600'}`}
-                        >
-                          <div className="w-2 h-2 rounded-full" style={{ backgroundColor: tag.color || '#cbd5e1' }}></div>
-                          {tag.name}
-                          {selectedTags.some(t => t.id === tag.id) && <span className="ml-auto text-[10px]">✓</span>}
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                <div className="mt-2 flex justify-end">
+                  {isSaving ? <span className="text-[9px] text-indigo-400 animate-pulse font-bold uppercase tracking-widest">Сохранение...</span> : <span className="text-[9px] text-slate-300 font-bold uppercase tracking-widest">Автосохранение</span>}
                 </div>
               </div>
             </div>
-          </div>
 
-          <div className="p-6 border-t border-slate-50 flex justify-between items-center bg-slate-50/30">
-            {isSaving ? <span className="text-[10px] text-indigo-400 animate-pulse font-bold uppercase tracking-widest">Сохранение...</span> : <span className="text-[10px] text-slate-300 font-bold uppercase tracking-widest">Автосохранение</span>}
-            <button onClick={() => setIsPanelOpen(false)} className="bg-black text-white px-6 py-2 rounded-full text-xs font-bold hover:bg-slate-800 transition">Закрыть</button>
+
+          </>
+        ) : (
+          <div className="flex flex-col items-center justify-center h-full text-slate-300 p-8 text-center opacity-50 select-none">
+            <span className="text-4xl mb-4 grayscale">📝</span>
+            <p className="text-[10px] font-bold uppercase tracking-widest">Выберите задачу</p>
           </div>
-        </aside>
-      )
+        )}
+      </aside>
+
+      {/* CALENDAR PANEL */}
+      {
+        isCalendarPanelOpen && (
+          <aside
+            style={{ width: `${calendarWidth}px` }}
+            className="hidden lg:flex flex-col flex-shrink-0 border-l border-slate-100 bg-[#FAFAFA] sticky top-0 h-screen overflow-hidden group/calendar z-10"
+          >
+            <div
+              onMouseDown={() => {
+                isResizingCalendar.current = true
+                document.body.style.cursor = 'ew-resize'
+                document.body.style.userSelect = 'none'
+                document.body.classList.add('resizing')
+              }}
+              className="absolute top-0 left-[-4px] w-2 h-full cursor-ew-resize hover:bg-indigo-500/50 transition-colors z-50 group-hover/calendar:bg-slate-200"
+            />
+            {/* Mini Calendar Header */}
+            <div className="flex items-center justify-between p-4 px-6 border-b border-slate-100 bg-white">
+              <div className="flex items-center gap-2">
+                <span className="text-base">📅</span>
+                <h2 className="text-[13px] font-bold text-slate-800 capitalize">
+                  {format(currentCalendarDate, 'MMMM yyyy', { locale: ru })}
+                </h2>
+              </div>
+              <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5">
+                <button onClick={() => setCurrentCalendarDate(subDays(currentCalendarDate, 1))} className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-white text-slate-500 text-[10px]">◀</button>
+                <button onClick={() => setCurrentCalendarDate(new Date())} className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-white text-slate-500 text-[10px]">●</button>
+                <button onClick={() => setCurrentCalendarDate(addDays(currentCalendarDate, 1))} className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-white text-slate-500 text-[10px]">▶</button>
+              </div>
+              <button onClick={() => setIsCalendarPanelOpen(false)} className="text-slate-300 hover:text-black p-1 transition ml-2">✕</button>
+            </div>
+
+            <div className="flex-1 overflow-hidden relative">
+              <CalendarView
+                tasks={tasks}
+                currentDate={currentCalendarDate}
+                setCurrentDate={setCurrentCalendarDate}
+                selectedTaskId={currentTaskId}
+                onTaskClick={(task) => openTaskDetail(task, 'panel')}
+                onDropTaskOnCalendar={onDropTaskOnCalendar}
+                hourHeight={hourHeight}
+                setHourHeight={setHourHeight}
+                isNightHidden={isNightHidden}
+                setIsNightHidden={setIsNightHidden}
+                calendarDays={1}
+                movingTaskState={movingTaskState}
+                handleCalendarTaskTouchStart={handleCalendarTaskTouchStart}
+                handleCalendarTaskTouchMove={handleCalendarTaskTouchMove}
+                handleCalendarTaskTouchEnd={handleCalendarTaskTouchEnd}
+              />
+            </div>
+
+          </aside>
+        )
       }
 
       {/* Floating Action Button (Mobile) */}
@@ -2031,306 +2435,231 @@ function App() {
       }
 
       {/* MODAL: TASK DETAIL */}
-      {isModalOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/30 backdrop-blur-sm sm:p-6" onClick={() => closeModal()}>
-          <div className="bg-[#FDFDFD] w-full h-full sm:h-auto sm:max-w-2xl sm:rounded-3xl shadow-2xl flex flex-col overflow-hidden transition-all duration-300 ease-out"
-            style={{ transform: `translateY(${dragOffset}px)`, opacity: isDragging ? 0.95 : 1, overscrollBehavior: 'contain' }}
-            onClick={e => e.stopPropagation()}
-            onTouchStart={handleTouchStart}
-            onTouchMove={handleTouchMove}
-            onTouchEnd={handleTouchEnd}
-          >
-            <div className="w-10 h-1 bg-slate-200 rounded-full mx-auto mt-3 sm:hidden"></div>
+      {
+        isModalOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/30 backdrop-blur-sm sm:p-6" onClick={() => closeModal()}>
+            <div className="bg-[#FDFDFD] w-full h-full sm:h-auto sm:max-w-2xl sm:rounded-3xl shadow-2xl flex flex-col overflow-hidden transition-all duration-300 ease-out"
+              style={{ transform: `translateY(${dragOffset}px)`, opacity: isDragging ? 0.95 : 1, overscrollBehavior: 'contain' }}
+              onClick={e => {
+                e.stopPropagation();
+                // Close DatePicker if clicking outside of it (and outside the toggle button)
+                // This works because datePickerRef is attached to a div, not the functional component
+                if (showDatePicker &&
+                  datePickerRef.current && !datePickerRef.current.contains(e.target) &&
+                  (!datePickerBtnRef.current || !datePickerBtnRef.current.contains(e.target))) {
+                  setShowDatePicker(false);
+                }
+              }}
+              onTouchStart={handleTouchStart}
+              onTouchMove={handleTouchMove}
+              onTouchEnd={handleTouchEnd}
+            >
+              <div className="w-10 h-1 bg-slate-200 rounded-full mx-auto mt-3 sm:hidden"></div>
 
-            <div className="flex items-center justify-between p-6 sm:px-10 border-b border-slate-100">
-              <button onClick={() => closeModal()} className="text-slate-400 hover:text-black transition flex items-center gap-1 text-sm">
-                <span className="text-lg">←</span> Назад
-              </button>
-              <div className="relative flex items-center gap-3">
-                {isSaving && <span className="text-[10px] text-indigo-400 animate-pulse">Сохранение...</span>}
-                <button onClick={() => saveTask()} className="bg-black text-white px-6 py-2 rounded-full text-sm font-bold hover:bg-slate-800 transition">Готово</button>
-              </div>
-            </div>
-
-            <div className="flex-1 p-8 sm:p-12 overflow-y-auto no-scrollbar modal-scroll-area">
-              <input
-                type="text"
-                placeholder="Что нужно сделать?"
-                className="w-full text-3xl font-bold placeholder:text-slate-100 border-none focus:ring-0 p-0 mb-6 text-black outline-none bg-transparent"
-                value={title}
-                onChange={e => setTitle(e.target.value)}
-                autoFocus={modalMode === 'create'}
-              />
-              {/* MARKDOWN EDITOR */}
-              <div className="mb-8">
-                <div className="flex gap-4 mb-2 border-b border-slate-100">
-                  <button
-                    onClick={() => setIsPreviewMode(false)}
-                    className={`pb-2 text-xs font-bold uppercase tracking-wider transition ${!isPreviewMode ? 'text-black border-b-2 border-black' : 'text-slate-400 hover:text-slate-600'}`}
-                  >
-                    Редактор
-                  </button>
-                  <button
-                    onClick={() => setIsPreviewMode(true)}
-                    className={`pb-2 text-xs font-bold uppercase tracking-wider transition ${isPreviewMode ? 'text-black border-b-2 border-black' : 'text-slate-400 hover:text-slate-600'}`}
-                  >
-                    Просмотр
-                  </button>
-                  <a href="https://www.markdownguide.org/basic-syntax/" target="_blank" rel="noreferrer" className="ml-auto text-[10px] text-slate-300 hover:text-slate-500 flex items-center gap-1">
-                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                    Markdown
-                  </a>
-                </div>
-
-                {!isPreviewMode ? (
-                  <textarea
-                    placeholder="Детали... (поддерживается Markdown)"
-                    className="w-full text-[17px] text-slate-500 placeholder:text-slate-200 border-none focus:ring-0 p-0 resize-none h-48 outline-none leading-relaxed bg-transparent font-mono"
-                    value={description}
-                    onChange={e => setDescription(e.target.value)}
-                  />
-                ) : (
-                  <div className="prose prose-sm prose-slate max-w-none h-48 overflow-y-auto custom-markdown">
-                    {description ? (
-                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
-                        a: ({ node, ...props }) => <a {...props} className="text-blue-500 hover:underline" target="_blank" rel="noreferrer" />,
-                        ul: ({ node, ...props }) => <ul {...props} className="list-disc pl-4" />,
-                        ol: ({ node, ...props }) => <ol {...props} className="list-decimal pl-4" />,
-                        code: ({ node, ...props }) => <code {...props} className="bg-slate-100 rounded px-1 py-0.5 text-xs font-mono text-pink-500" />
-                      }}>
-                        {description}
-                      </ReactMarkdown>
-                    ) : (
-                      <span className="text-slate-300 italic">Нет описания для просмотра</span>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* SUBTASKS SECTION */}
-              <div className="mb-8">
-                <div className="space-y-3">
-                  {subtasks.map(st => (
-                    <div key={st.id} className="flex items-start gap-3 group">
-                      <button
-                        onClick={() => handleToggleSubtask(st.id)}
-                        className={`mt-1 w-5 h-5 rounded border flex items-center justify-center transition ${st.completed ? 'bg-indigo-500 border-indigo-500 text-white' : 'border-slate-300 hover:border-indigo-400'}`}
-                      >
-                        {st.completed && <span className="text-xs">✓</span>}
-                      </button>
-                      <input
-                        type="text"
-                        value={st.text}
-                        onChange={e => handleSubtaskChange(st.id, e.target.value)}
-                        placeholder="Подзадача..."
-                        className={`flex-1 bg-transparent border-none p-0 text-sm focus:ring-0 outline-none ${st.completed ? 'text-slate-400 line-through' : 'text-slate-700'}`}
-                      />
-                      <button onClick={() => handleDeleteSubtask(st.id)} className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-400 transition px-2">×</button>
-                    </div>
-                  ))}
-                </div>
-                <button
-                  onClick={handleAddSubtask}
-                  className="mt-4 flex items-center gap-2 text-sm text-slate-400 hover:text-indigo-600 font-bold transition"
-                >
-                  <span className="text-lg">+</span> Добавить подзадачу
+              <div className="flex items-center justify-between p-6 sm:px-10 border-b border-slate-100">
+                <button onClick={() => closeModal()} className="text-slate-400 hover:text-black transition flex items-center gap-1 text-sm">
+                  <span className="text-lg">←</span> Назад
                 </button>
+                <div className="relative flex items-center gap-3">
+                  {isSaving && <span className="text-[10px] text-indigo-400 animate-pulse">Сохранение...</span>}
+                  <button onClick={() => saveTask()} className="bg-black text-white px-6 py-2 rounded-full text-sm font-bold hover:bg-slate-800 transition">Готово</button>
+                </div>
               </div>
 
-              <div className="space-y-8">
-                <div className="flex flex-col gap-6">
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => setShowDatePicker(!showDatePicker)}
-                      className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl border text-xs font-bold transition ${dueDate ? 'bg-black border-black text-white' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}
-                    >
-                      🗓️ {dueDate ? new Date(dueDate).toLocaleDateString() : "Срок"}
-                    </button>
-                    <button
-                      onClick={() => setPriority(priority === 'low' ? 'high' : 'low')}
-                      className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl border text-xs font-bold transition ${priority === 'high' ? 'bg-red-50 border-red-100 text-red-600' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}
-                    >
-                      {priority === 'high' ? '🚩 Срочно' : '🏁 Обычный'}
-                    </button>
-                  </div>
+              <div className="flex-1 p-8 sm:p-12 overflow-y-auto no-scrollbar modal-scroll-area">
+                <input
+                  type="text"
+                  placeholder="Что нужно сделать?"
+                  className="w-full text-3xl font-bold placeholder:text-slate-100 border-none focus:ring-0 p-0 mb-6 text-black outline-none bg-transparent"
+                  value={title}
+                  onChange={e => setTitle(e.target.value)}
+                  autoFocus={modalMode === 'create'}
+                />
+                {/* MARKDOWN EDITOR */}
+                {/* RICH TEXT EDITOR (React Quill) */}
+                <div className="mb-8 editor-container">
+                  <ReactQuill
+                    theme="snow"
+                    value={description}
+                    onChange={setDescription}
+                    placeholder="Детали задачи..."
+                    modules={{
+                      toolbar: [
+                        [{ 'header': [1, 2, false] }],
+                        ['bold', 'italic', 'underline', 'strike'],
+                        [{ 'list': 'ordered' }, { 'list': 'bullet' }],
+                        ['link', 'clean']
+                      ],
+                    }}
+                    className="bg-transparent"
+                  />
+                  <style>{`
+                  .quill {
+                    display: flex;
+                    flex-direction: column;
+                  }
+                  .ql-toolbar {
+                    border: none !important;
+                    border-bottom: 1px solid #f1f5f9 !important;
+                    padding-left: 0 !important;
+                    padding-right: 0 !important;
+                  }
+                  .ql-container {
+                    border: none !important;
+                    font-size: 15px; /* Совпадает с дизайном */
+                  }
+                  .ql-editor {
+                    padding: 16px 0;
+                    min-height: 150px;
+                    color: #64748b; /* text-slate-500 */
+                  }
+                  .ql-editor.ql-blank::before {
+                    color: #e2e8f0; /* text-slate-200 placeholder */
+                    font-style: normal;
+                  }
+                `}</style>
+                </div>
 
-                  {showDatePicker && (
-                    <div className="p-4 bg-white rounded-2xl border border-slate-100 shadow-sm transition-all duration-300">
-                      <div className="grid grid-cols-3 gap-1 mb-4">
-                        <button onClick={() => setFormatDate(0)} className="py-2 bg-slate-50 rounded-lg text-[10px] font-bold uppercase hover:bg-black hover:text-white transition active:scale-95">Сегодня</button>
-                        <button onClick={() => setFormatDate(1)} className="py-2 bg-slate-50 rounded-lg text-[10px] font-bold uppercase hover:bg-black hover:text-white transition active:scale-95">Завтра</button>
-                        <button onClick={() => setFormatDate(7)} className="py-2 bg-slate-50 rounded-lg text-[10px] font-bold uppercase hover:bg-black hover:text-white transition active:scale-95">Неделя</button>
+                {/* SUBTASKS SECTION */}
+                <div className="mb-8">
+                  <div className="space-y-3">
+                    {subtasks.map(st => (
+                      <div key={st.id} className="flex items-start gap-3 group">
+                        <button
+                          onClick={() => handleToggleSubtask(st.id)}
+                          className={`mt-1 w-5 h-5 rounded border flex items-center justify-center transition ${st.completed ? 'bg-indigo-500 border-indigo-500 text-white' : 'border-slate-300 hover:border-indigo-400'}`}
+                        >
+                          {st.completed && <span className="text-xs">✓</span>}
+                        </button>
+                        <input
+                          type="text"
+                          value={st.text}
+                          onChange={e => handleSubtaskChange(st.id, e.target.value)}
+                          placeholder="Подзадача..."
+                          className={`flex-1 bg-transparent border-none p-0 text-sm focus:ring-0 outline-none ${st.completed ? 'text-slate-400 line-through' : 'text-slate-700'}`}
+                        />
+                        <button onClick={() => handleDeleteSubtask(st.id)} className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-400 transition px-2">×</button>
                       </div>
+                    ))}
+                  </div>
+                  <button
+                    onClick={handleAddSubtask}
+                    className="mt-4 flex items-center gap-2 text-sm text-slate-400 hover:text-indigo-600 font-bold transition"
+                  >
+                    <span className="text-lg">+</span> Добавить подзадачу
+                  </button>
+                </div>
 
-                      <div className="space-y-4">
-                        <div className="flex gap-4">
-                          <div className="flex-1">
-                            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1 ml-1">Дата начала</p>
-                            <input
-                              type="date"
-                              value={dueDate}
-                              onChange={e => {
-                                setDueDate(e.target.value);
-                                if (!endDate || e.target.value > endDate) setEndDate(e.target.value);
-                              }}
-                              className="w-full p-3 border border-slate-200 rounded-lg outline-none focus:ring-1 focus:ring-slate-300 transition"
-                            />
-                          </div>
-                          <div className="flex-1">
-                            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1 ml-1">Дата конца</p>
-                            <input
-                              type="date"
-                              value={endDate || dueDate}
-                              min={dueDate}
-                              onChange={e => setEndDate(e.target.value)}
-                              className="w-full p-3 border border-slate-200 rounded-lg outline-none focus:ring-1 focus:ring-slate-300 transition"
-                            />
-                          </div>
-                        </div>
+                <div className="space-y-8">
+                  <div className="flex flex-col gap-6">
+                    <div className="flex gap-2">
+                      <button
+                        ref={datePickerBtnRef}
+                        onClick={() => setShowDatePicker(!showDatePicker)}
+                        className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl border text-xs font-bold transition ${dueDate ? 'bg-black border-black text-white' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}
+                      >
+                        🗓️ {dueDate ? new Date(dueDate).toLocaleDateString() : "Срок"}
+                      </button>
+                      <button
+                        onClick={() => setPriority(priority === 'low' ? 'high' : 'low')}
+                        className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl border text-xs font-bold transition ${priority === 'high' ? 'bg-red-50 border-red-100 text-red-600' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}
+                      >
+                        {priority === 'high' ? '🚩 Срочно' : '🏁 Обычный'}
+                      </button>
+                    </div>
 
-                        {dueTime ? (
-                          <div className="space-y-4">
-                            <div className="flex gap-4">
-                              <div className="flex-1">
-                                <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1 ml-1">Начало</p>
-                                <input
-                                  type="time"
-                                  value={dueTime}
-                                  onChange={e => {
-                                    const newTime = e.target.value
-                                    if (newTime && dueTime && (dueTimeEnd || duration)) {
-                                      const d1 = new Date(`2000-01-01T${dueTime}`)
-                                      const d2 = new Date(`2000-01-01T${newTime}`)
-                                      const diff = d2.getTime() - d1.getTime()
-                                      if (dueTimeEnd) {
-                                        const endD = new Date(`2000-01-01T${dueTimeEnd}`)
-                                        const newEndD = new Date(endD.getTime() + diff)
-                                        setDueTimeEnd(format(newEndD, 'HH:mm'))
-                                      }
-                                    }
-                                    setDueTime(newTime)
-                                  }}
-                                  className="w-full p-3 border border-slate-200 rounded-lg outline-none focus:ring-1 focus:ring-slate-300 transition"
-                                />
-                              </div>
-                              <div className="flex-1">
-                                <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1 ml-1">Конец</p>
-                                <input
-                                  type="time"
-                                  value={dueTimeEnd}
-                                  onChange={e => {
-                                    setDueTimeEnd(e.target.value);
-                                    setDuration(0);
-                                  }}
-                                  className="w-full p-3 border border-slate-200 rounded-lg outline-none focus:ring-1 focus:ring-slate-300 transition"
-                                />
-                              </div>
-                            </div>
-                            <div className="flex items-center justify-between">
-                              <div className="flex-1 max-w-[120px]">
-                                <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1 ml-1">Длительность</p>
-                                <input
-                                  type="number"
-                                  value={duration}
-                                  onChange={e => {
-                                    setDuration(parseInt(e.target.value) || 0);
-                                    setDueTimeEnd('');
-                                  }}
-                                  className="w-full p-3 border border-slate-200 rounded-lg outline-none focus:ring-1 focus:ring-slate-300 transition"
-                                />
-                              </div>
+                    {showDatePicker && (
+                      <div ref={datePickerRef} className="mt-4 animate-in fade-in zoom-in-95 duration-200 flex justify-center">
+                        <DatePicker
+                          dueDate={dueDate}
+                          setDueDate={setDueDate}
+                          endDate={endDate}
+                          setEndDate={setEndDate}
+                          dueTime={dueTime}
+                          setDueTime={setDueTime}
+                          dueTimeEnd={dueTimeEnd}
+                          setDueTimeEnd={setDueTimeEnd}
+                          duration={duration}
+                          setDuration={setDuration}
+                          onClose={() => setShowDatePicker(false)}
+                          onSave={() => saveTask()}
+                        />
+                      </div>
+                    )}
+
+                    <div className="flex gap-2 pt-2">
+                      {/* PROJECT SELECTOR */}
+                      <div className="relative">
+                        <button
+                          onClick={() => { setShowProjectSelect(!showProjectSelect); setShowTagSelect(false); }}
+                          className={`px-4 py-3 rounded-xl border text-xs font-bold transition flex items-center gap-2 ${listId ? 'bg-black border-black text-white' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}
+                        >
+                          <span>📁</span>
+                          {listId ? allLists.find(l => l.id === listId)?.name : 'Проект'}
+                          <span className="opacity-50 text-[10px] ml-1">▼</span>
+                        </button>
+
+                        {showProjectSelect && (
+                          <div className="absolute bottom-full left-0 mb-2 w-64 bg-white rounded-xl shadow-2xl border border-slate-100 p-2 z-50 max-h-60 overflow-y-auto transform origin-bottom animate-in zoom-in-95 duration-200">
+                            <button
+                              onClick={() => { setListId(null); setShowProjectSelect(false); }}
+                              className="w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition flex items-center gap-2 text-slate-600"
+                            >
+                              <span>📥</span> Входящие
+                            </button>
+                            {allLists.map(list => (
                               <button
-                                onClick={() => { setDueTime(''); setDueTimeEnd(''); }}
-                                className="text-[10px] text-red-500 font-bold uppercase hover:text-red-700 transition"
+                                key={list.id}
+                                onClick={() => { setListId(list.id); setShowProjectSelect(false); }}
+                                className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition flex items-center gap-2 ${listId === list.id ? 'bg-slate-100 text-black' : 'text-slate-600'}`}
                               >
-                                Убрать время
+                                <span>{list.name.toUpperCase().includes('ЦЕЛИ') ? '⭐' : list.name.toUpperCase().includes('КУПИТЬ') ? '🛒' : '📁'}</span>
+                                {list.name}
                               </button>
-                            </div>
+                            ))}
                           </div>
-                        ) : (
-                          <button
-                            onClick={() => setDueTime('09:00')}
-                            className="w-full py-3 bg-slate-50 rounded-xl text-[10px] font-bold uppercase text-slate-400 hover:bg-slate-100 transition"
-                          >
-                            Добавить время
-                          </button>
                         )}
                       </div>
-                    </div>
-                  )}
 
-                  <div className="flex gap-2 pt-2">
-                    {/* PROJECT SELECTOR */}
-                    <div className="relative">
-                      <button
-                        onClick={() => { setShowProjectSelect(!showProjectSelect); setShowTagSelect(false); }}
-                        className={`px-4 py-3 rounded-xl border text-xs font-bold transition flex items-center gap-2 ${listId ? 'bg-black border-black text-white' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}
-                      >
-                        <span>📁</span>
-                        {listId ? allLists.find(l => l.id === listId)?.name : 'Проект'}
-                        <span className="opacity-50 text-[10px] ml-1">▼</span>
-                      </button>
+                      {/* TAG SELECTOR */}
+                      <div className="relative">
+                        <button
+                          onClick={() => { setShowTagSelect(!showTagSelect); setShowProjectSelect(false); }}
+                          className={`px-4 py-3 rounded-xl border text-xs font-bold transition flex items-center gap-2 ${selectedTags.length > 0 ? 'bg-black border-black text-white' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}
+                        >
+                          <span>🏷️</span>
+                          {selectedTags.length > 0 ? `${selectedTags.length} меток` : 'Метки'}
+                          <span className="opacity-50 text-[10px] ml-1">▼</span>
+                        </button>
 
-                      {showProjectSelect && (
-                        <div className="absolute bottom-full left-0 mb-2 w-64 bg-white rounded-xl shadow-2xl border border-slate-100 p-2 z-50 max-h-60 overflow-y-auto transform origin-bottom animate-in zoom-in-95 duration-200">
-                          <button
-                            onClick={() => { setListId(null); setShowProjectSelect(false); }}
-                            className="w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition flex items-center gap-2 text-slate-600"
-                          >
-                            <span>📥</span> Входящие
-                          </button>
-                          {allLists.map(list => (
-                            <button
-                              key={list.id}
-                              onClick={() => { setListId(list.id); setShowProjectSelect(false); }}
-                              className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition flex items-center gap-2 ${listId === list.id ? 'bg-slate-100 text-black' : 'text-slate-600'}`}
-                            >
-                              <span>{list.name.toUpperCase().includes('ЦЕЛИ') ? '⭐' : list.name.toUpperCase().includes('КУПИТЬ') ? '🛒' : '📁'}</span>
-                              {list.name}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* TAG SELECTOR */}
-                    <div className="relative">
-                      <button
-                        onClick={() => { setShowTagSelect(!showTagSelect); setShowProjectSelect(false); }}
-                        className={`px-4 py-3 rounded-xl border text-xs font-bold transition flex items-center gap-2 ${selectedTags.length > 0 ? 'bg-black border-black text-white' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}
-                      >
-                        <span>🏷️</span>
-                        {selectedTags.length > 0 ? `${selectedTags.length} меток` : 'Метки'}
-                        <span className="opacity-50 text-[10px] ml-1">▼</span>
-                      </button>
-
-                      {showTagSelect && (
-                        <div className="absolute bottom-full left-0 mb-2 w-64 bg-white rounded-xl shadow-2xl border border-slate-100 p-2 z-50 max-h-60 overflow-y-auto transform origin-bottom animate-in zoom-in-95 duration-200">
-                          {allTags.map(tag => (
-                            <button
-                              key={tag.id}
-                              onClick={() => {
-                                const isSelected = selectedTags.some(t => t.id === tag.id)
-                                if (isSelected) setSelectedTags(selectedTags.filter(t => t.id !== tag.id))
-                                else setSelectedTags([...selectedTags, tag])
-                              }}
-                              className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition flex items-center gap-2 mb-1 ${selectedTags.some(t => t.id === tag.id) ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600'}`}
-                            >
-                              <div className="w-2 h-2 rounded-full" style={{ backgroundColor: tag.color || '#cbd5e1' }}></div>
-                              {tag.name}
-                              {selectedTags.some(t => t.id === tag.id) && <span className="ml-auto text-[10px]">✓</span>}
-                            </button>
-                          ))}
-                        </div>
-                      )}
+                        {showTagSelect && (
+                          <div className="absolute bottom-full left-0 mb-2 w-64 bg-white rounded-xl shadow-2xl border border-slate-100 p-2 z-50 max-h-60 overflow-y-auto transform origin-bottom animate-in zoom-in-95 duration-200">
+                            {allTags.map(tag => (
+                              <button
+                                key={tag.id}
+                                onClick={() => {
+                                  const isSelected = selectedTags.some(t => t.id === tag.id)
+                                  if (isSelected) setSelectedTags(selectedTags.filter(t => t.id !== tag.id))
+                                  else setSelectedTags([...selectedTags, tag])
+                                }}
+                                className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition flex items-center gap-2 mb-1 ${selectedTags.some(t => t.id === tag.id) ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600'}`}
+                              >
+                                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: tag.color || '#cbd5e1' }}></div>
+                                {tag.name}
+                                {selectedTags.some(t => t.id === tag.id) && <span className="ml-auto text-[10px]">✓</span>}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
       <style>{`
         .vertical-text {
@@ -2338,7 +2667,7 @@ function App() {
           transform: rotate(180deg);
         }
       `}</style>
-    </div>
+    </div >
   )
 }
 
