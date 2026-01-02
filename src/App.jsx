@@ -50,7 +50,7 @@ const SidebarContent = ({
   hoveredListId, setHoveredListId,
   dragOverListInfo, setDragOverListInfo,
   dragOverFolderInfo, setDragOverFolderInfo,
-  setActiveView, activeView
+  setActiveView, activeView, setIsSettingsOpen
 }) => {
   const today = new Date().getDate()
   const [expandedTaskIds, setExpandedTaskIds] = useState({});
@@ -86,7 +86,17 @@ const SidebarContent = ({
         </div>
 
         {/* ПРОЕКТЫ (Header) */}
-        <div className="px-6 mb-2 flex items-center justify-between group">
+        <div
+          className="px-6 mb-2 flex items-center justify-between group"
+          onDragOver={e => e.preventDefault()}
+          onDrop={e => {
+            const listId = e.dataTransfer.getData('listId');
+            if (listId) {
+              // Move to root
+              onDrop(e, null);
+            }
+          }}
+        >
           <div className="flex items-center gap-2 cursor-pointer w-full" onClick={() => toggleFolder('lists_section')}>
             <span className={`text-[9px] text-slate-400 transition transform ${collapsedFolders['lists_section'] ? '-rotate-90' : ''}`}>▼</span>
             <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Списки</p>
@@ -274,6 +284,17 @@ const SidebarContent = ({
 
       </div>
 
+      {/* Settings Button */}
+      <div className="px-6 py-3 border-t border-slate-100 bg-slate-50/50">
+        <button
+          onClick={() => setIsSettingsOpen(true)}
+          className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-slate-500 hover:bg-white hover:text-indigo-600 hover:shadow-sm transition text-[13px] font-medium group"
+        >
+          <span className="text-base grayscale opacity-70 group-hover:grayscale-0 group-hover:opacity-100">⚙️</span>
+          Настройки
+        </button>
+      </div>
+
       {/* AI Assistant Chat Input */}
       <div className="p-4 border-t border-slate-100 bg-white">
         <div className="relative group">
@@ -292,9 +313,60 @@ const SidebarContent = ({
   )
 }
 
-const CalendarView = ({ tasks, currentDate, setCurrentDate, onTaskClick, onDropTaskOnCalendar, resizingTaskState, handleTaskResizeStart, hourHeight, setHourHeight, isNightHidden, setIsNightHidden, calendarDays = 7, movingTaskState, handleCalendarTaskTouchStart, handleCalendarTaskTouchMove, handleCalendarTaskTouchEnd, selectedTaskId }) => {
+const CalendarView = ({ tasks, currentDate, setCurrentDate, onTaskClick, onDropTaskOnCalendar, resizingTaskState, handleTaskResizeStart, hourHeight, setHourHeight, isNightHidden, setIsNightHidden, calendarDays = 7, movingTaskState, handleCalendarTaskTouchStart, handleCalendarTaskTouchMove, handleCalendarTaskTouchEnd, selectedTaskId, workingStart = 8, workingEnd = 19 }) => {
   const [dragOverSlot, setDragOverSlot] = useState(null); // 'month-DATE', 'all-day-DATE', or 'hour-DATE-HOUR'
   const [now, setNow] = useState(new Date());
+
+  // Ref for Native Wheel Event (Non-passive)
+  const gridRef = useRef(null)
+
+  // Native Wheel Listener to prevent Browser Zoom
+  useEffect(() => {
+    const el = gridRef.current
+    if (!el) return
+    const handleNativeWheel = (e) => {
+      if (e.ctrlKey) {
+        e.preventDefault()
+        const delta = e.deltaY > 0 ? -1 : 1
+        setHourHeight(prev => Math.max(20, Math.min(200, prev + delta * 5)))
+      }
+    }
+    el.addEventListener('wheel', handleNativeWheel, { passive: false })
+    return () => el.removeEventListener('wheel', handleNativeWheel)
+  }, []) // Empty deps because we use functional state update
+
+
+  // --- PINCH ZOOM HANDLERS ---
+  const pinchDistRef = useRef(null)
+
+  const handlePinchStart = (e) => {
+    if (e.touches.length === 2) {
+      const d = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      )
+      pinchDistRef.current = d
+    }
+  }
+
+  const handlePinchMove = (e) => {
+    if (e.touches.length === 2 && pinchDistRef.current) {
+      const d = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      )
+      const diff = d - pinchDistRef.current
+      if (Math.abs(diff) > 5) {
+        const scale = diff > 0 ? 2 : -2
+        setHourHeight(prev => Math.max(20, Math.min(200, prev + scale)))
+        pinchDistRef.current = d
+      }
+    }
+  }
+
+  const handlePinchEnd = () => {
+    pinchDistRef.current = null
+  }
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 60000);
@@ -319,7 +391,7 @@ const CalendarView = ({ tasks, currentDate, setCurrentDate, onTaskClick, onDropT
     // We can't export this easily, so we duplicate logic in handleEnd or pass it back.
     // For now, duplicate logic in handleEnd is safer given component structure.
     const allHours = Array.from({ length: 24 }, (_, i) => i)
-    const hours = isNightHidden ? allHours.filter(h => h >= 7 && h <= 21) : allHours
+    const hours = isNightHidden ? allHours.filter(h => h >= workingStart && h < workingEnd) : allHours
 
     const handleWheel = (e) => {
       if (e.ctrlKey) {
@@ -378,10 +450,12 @@ const CalendarView = ({ tasks, currentDate, setCurrentDate, onTaskClick, onDropT
       }
     }
 
+
+
     return (
       <div className="flex-1 flex flex-col min-h-0">
         {/* Header Days */}
-        <div className={`grid border-b border-slate-100 bg-slate-50/30 shrink-0`} style={{ gridTemplateColumns: `60px repeat(${calendarDays}, 1fr)` }}>
+        <div className={`${calendarDays === 1 ? 'hidden md:grid' : 'grid'} border-b border-slate-100 bg-slate-50/30 shrink-0 pr-[10px]`} style={{ gridTemplateColumns: `60px repeat(${calendarDays}, 1fr)` }}>
           <div className="border-r border-slate-100"></div>
           {/* Day Header */}
           {days.map((day, i) => (
@@ -395,7 +469,7 @@ const CalendarView = ({ tasks, currentDate, setCurrentDate, onTaskClick, onDropT
         </div>
 
         {/* All Day Slots */}
-        <div id="all-day-row" className={`grid bg-slate-50/30 border-b border-slate-100 min-h-[40px] z-50`} style={{ gridTemplateColumns: `60px repeat(${calendarDays}, 1fr)` }}>
+        <div id="all-day-row" className={`grid bg-slate-50/30 border-b border-slate-100 min-h-[40px] z-50 pr-[10px]`} style={{ gridTemplateColumns: `60px repeat(${calendarDays}, 1fr)` }}>
           <div className="flex items-center justify-center border-r border-slate-100 py-2">
             <span className="text-[8px] font-black text-slate-400 uppercase vertical-text">Весь день</span>
           </div>
@@ -422,15 +496,18 @@ const CalendarView = ({ tasks, currentDate, setCurrentDate, onTaskClick, onDropT
                   if (taskId) onDropTaskOnCalendar(taskId, day, 'all-day')
                   setDragOverSlot(null)
                 }}
-                className={`border-r border-slate-100 p-2 min-h-[50px] bg-slate-50/10 transition-colors ${dragOverSlot === slotId ? 'bg-indigo-50 ring-2 ring-indigo-200 ring-inset opacity-100 z-10' : ''}`}
+                className={`border-r border-slate-100 p-2 min-h-[50px] bg-slate-50/10 transition-colors min-w-0 overflow-hidden ${dragOverSlot === slotId ? 'bg-indigo-50 ring-2 ring-indigo-200 ring-inset opacity-100 z-10' : ''}`}
               >
                 <div className="space-y-1">
                   {allDayTasks.map(task => (
                     <div key={task.id}
                       draggable="true"
                       onDragStart={(e) => { e.dataTransfer.setData('taskId', task.id); e.dataTransfer.effectAllowed = 'move'; }}
-                      onClick={() => onTaskClick(task)}
-                      className={`text-[10px] p-2 rounded-lg truncate cursor-pointer shadow-sm ${task.is_completed ? 'bg-slate-100 text-slate-300' : 'bg-white border border-slate-100 text-slate-700'}`}>
+                      onClick={(e) => { e.stopPropagation(); onTaskClick(task); }}
+                      onTouchStart={(e) => handleCalendarTaskTouchStart(e, task)}
+                      onTouchMove={(e) => handleCalendarTaskTouchMove(e, task)}
+                      onTouchEnd={handleCalendarTaskTouchEnd}
+                      className={`text-[10px] p-1.5 w-full block truncate rounded-lg cursor-pointer shadow-sm ${task.is_completed ? 'bg-slate-100 text-slate-300' : 'bg-white border border-slate-100 text-slate-700'}`}>
                       {task.title}
                     </div>
                   ))}
@@ -441,8 +518,10 @@ const CalendarView = ({ tasks, currentDate, setCurrentDate, onTaskClick, onDropT
         </div>
 
         {/* Main Grid: Columns */}
-        <div className="flex-1 overflow-y-auto no-scrollbar relative" onWheel={handleWheel}>
+        <div ref={gridRef} className="flex-1 overflow-y-scroll custom-scrollbar relative" onTouchStart={handlePinchStart} onTouchMove={handlePinchMove} onTouchEnd={handlePinchEnd}>
           <div id="week-view-container" className={`grid bg-white relative`} style={{ height: `${hourHeight * hours.length}px`, gridTemplateColumns: `60px repeat(${calendarDays}, 1fr)` }}>
+            {/* Global Ghost Highlight Element (Managed by Direct DOM Ref) */}
+            <div id="calendar-ghost-highlight" className="absolute bg-indigo-500/20 border-2 border-indigo-500/50 border-dashed rounded-xl z-0 pointer-events-none hidden transition-all duration-75"></div>
 
             {/* Time Labels Column */}
             <div className="border-r border-slate-100">
@@ -477,6 +556,10 @@ const CalendarView = ({ tasks, currentDate, setCurrentDate, onTaskClick, onDropT
             {days.map((day, i) => {
               const dayStr = format(day, 'yyyy-MM-dd')
               const dayTasks = safeTasks.filter(t => {
+                // Fix: Allow dragging from All-day to Grid
+                // If task is being moved, show it in grid even if no due_time initially
+                if (movingTaskState && movingTaskState.id === t.id) return true
+
                 if (!t.due_date || !t.due_time) return false
                 const startStr = t.due_date.split('T')[0]
                 const endStr = (t.end_date || t.due_date).split('T')[0]
@@ -491,7 +574,9 @@ const CalendarView = ({ tasks, currentDate, setCurrentDate, onTaskClick, onDropT
                   onDragLeave={() => setDragOverSlot(null)}
                   onDrop={(e) => handleGridDrop(e, day)}
                 >
-                  {/* Drag Highlight */}
+
+
+                  {/* Drag Highlight (DragOverSlot) - Keep for Native DnD if still used */}
                   {dragOverSlot && dragOverSlot.startsWith(`slot-${format(day, 'yyyy-MM-dd')}`) && (
                     (() => {
                       const parts = dragOverSlot.split('-')
@@ -521,7 +606,8 @@ const CalendarView = ({ tasks, currentDate, setCurrentDate, onTaskClick, onDropT
                   {/* Tasks */}
                   {dayTasks.map((task, idx) => {
                     // Determine visual props
-                    const [h_s, m_s] = task.due_time.split(':').map(Number)
+                    const timeS = task.due_time || '00:00'
+                    const [h_s, m_s] = timeS.split(':').map(Number)
                     const [h_e, m_e] = (task.end_time || '23:59:59').split(':').map(Number)
 
                     const startMinutes = h_s * 60 + m_s
@@ -536,6 +622,12 @@ const CalendarView = ({ tasks, currentDate, setCurrentDate, onTaskClick, onDropT
                     if (resizingTaskState && resizingTaskState.id === task.id) {
                       duration = resizingTaskState.currentDuration
                     }
+
+                    // Visual Fix: Force 1h duration when dragging from All-day so it's not huge
+                    if (movingTaskState && movingTaskState.id === task.id && !task.due_time) {
+                      duration = 60
+                    }
+
                     if (duration < 15) duration = 15;
 
                     // HANDLE MOVING VISUALS
@@ -543,10 +635,19 @@ const CalendarView = ({ tasks, currentDate, setCurrentDate, onTaskClick, onDropT
                     if (movingTaskState && movingTaskState.id === task.id) {
                       const rect = document.getElementById('week-view-container')?.getBoundingClientRect()
                       if (rect) {
-                        const deltaY = movingTaskState.currentY - movingTaskState.startY
-                        const deltaMin = (deltaY / rect.height) * totalDisplayMinutes
-                        const newStart = displayStartMinutes + deltaMin
-                        currentTopPct = (newStart / totalDisplayMinutes) * 100
+                        // If dragging from All-day (no originalTime), we calculate position from clientY relative to grid top
+                        if (!task.due_time) {
+                          const relativeY = movingTaskState.currentY - rect.top
+                          const min = (relativeY / rect.height) * totalDisplayMinutes
+                          // Snap to 30 mins to highlight drop area
+                          const snappedMin = Math.max(0, Math.round(min / 30) * 30)
+                          currentTopPct = (snappedMin / totalDisplayMinutes) * 100
+                        } else {
+                          const deltaY = movingTaskState.currentY - movingTaskState.startY
+                          const deltaMin = (deltaY / rect.height) * totalDisplayMinutes
+                          const newStart = displayStartMinutes + deltaMin
+                          currentTopPct = (newStart / totalDisplayMinutes) * 100
+                        }
                       }
                     }
 
@@ -556,7 +657,8 @@ const CalendarView = ({ tasks, currentDate, setCurrentDate, onTaskClick, onDropT
                     // Overlap logic
                     const overlaps = dayTasks.filter(other => {
                       if (other.id === task.id) return false
-                      const [oh_s, om_s] = other.due_time.split(':').map(Number)
+                      const oTimeS = other.due_time || '00:00'
+                      const [oh_s, om_s] = oTimeS.split(':').map(Number)
                       const [oh_e, om_e] = (other.end_time || '23:59:59').split(':').map(Number)
                       const oStartMinTotal = oh_s * 60 + om_s
                       const oEndMinTotal = oh_e * 60 + om_e
@@ -571,7 +673,7 @@ const CalendarView = ({ tasks, currentDate, setCurrentDate, onTaskClick, onDropT
                     const widthPct = 100 / totalOverlap
                     const leftPct = index * widthPct
 
-                    const start = new Date(`${task.due_date.split('T')[0]}T${task.due_time}`)
+                    const start = new Date(`${task.due_date.split('T')[0]}T${task.due_time || '00:00:00'}`)
                     const end = task.end_time ? new Date(`${(task.end_date || task.due_date).split('T')[0]}T${task.end_time}`) : new Date(start.getTime() + duration * 60000)
 
                     const isSelected = selectedTaskId === task.id
@@ -600,7 +702,7 @@ const CalendarView = ({ tasks, currentDate, setCurrentDate, onTaskClick, onDropT
                           left: `${leftPct}%`,
                           width: `${widthPct}%`,
                           opacity: movingTaskState?.id === task.id ? 0.6 : 1,
-                          zIndex: movingTaskState?.id === task.id ? 50 : (isSelected ? 40 : 'auto'),
+                          zIndex: movingTaskState?.id === task.id ? 50 : (isSelected ? 40 : 10),
                           touchAction: 'none'
                         }}
                         id={`calendar-task-${task.id}`}
@@ -608,7 +710,7 @@ const CalendarView = ({ tasks, currentDate, setCurrentDate, onTaskClick, onDropT
                           ${isSelected ? 'ring-2 ring-black ring-offset-1 z-40' : 'hover:z-20'} 
                           ${task.is_completed ? 'bg-slate-100 border-slate-200 text-slate-300 opacity-60' : task.priority === 'high' ? 'bg-red-50 border-red-500 text-red-700' : 'bg-indigo-50 border-indigo-500 text-indigo-700'}`}
                       >
-                        <div className="pointer-events-none">
+                        <div className="">
                           <p className="truncate">{task.title}</p>
                           <p className={`text-[8px] mt-0.5 transition-all ${resizingTaskState?.id === task.id ? 'text-indigo-600 font-black scale-110 origin-left' : 'opacity-50'}`}>
                             {format(start, 'HH:mm')} - {format(end, 'HH:mm')}
@@ -663,7 +765,7 @@ function App() {
   // Фильтрация
   const [selectedTagId, setSelectedTagId] = useState(null)
   const [selectedListId, setSelectedListId] = useState(null)
-  const [dateFilter, setDateFilter] = useState(null)
+  const [dateFilter, setDateFilter] = useState('today')
   const [searchQuery, setSearchQuery] = useState('')
   const [sortBy, setSortBy] = useState('order') // 'order', 'title', 'date', 'tag'
   const [groupBy, setGroupBy] = useState('none') // 'none', 'priority', 'date'
@@ -671,7 +773,102 @@ function App() {
   const [activeView, setActiveView] = useState('tasks') // 'tasks' or 'calendar'
   const [currentCalendarDate, setCurrentCalendarDate] = useState(new Date())
   const [hourHeight, setHourHeight] = useState(60)
-  const [isNightHidden, setIsNightHidden] = useState(false)
+  const [isNightHidden, setIsNightHidden] = useState(() => localStorage.getItem('isNightHidden') === 'true') // Acts as 'Hide Non-Working Hours'
+  const [workingStart, setWorkingStart] = useState(() => {
+    const saved = localStorage.getItem('workingStart');
+    return saved ? Number(saved) : 9;
+  })
+  const [workingEnd, setWorkingEnd] = useState(() => {
+    const saved = localStorage.getItem('workingEnd');
+    return saved ? Number(saved) : 18;
+  })
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+
+  // Auth & Sync States
+  const [session, setSession] = useState(null)
+  const [authEmail, setAuthEmail] = useState('')
+  const [authPassword, setAuthPassword] = useState('')
+  const [authLoading, setAuthLoading] = useState(false)
+
+  // Auth Listener
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session)
+      if (session) loadUserSettings(session.user.id)
+    })
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session)
+      if (session) loadUserSettings(session.user.id)
+    })
+    return () => subscription.unsubscribe()
+  }, [])
+
+  async function loadUserSettings(userId) {
+    const { data } = await supabase.from('user_settings').select('*').eq('user_id', userId).single()
+    if (data) {
+      setWorkingStart(data.working_start)
+      setWorkingEnd(data.working_end)
+      setIsNightHidden(data.is_night_hidden)
+    }
+  }
+
+  // Handle Login
+  const handleLogin = async () => {
+    setAuthLoading(true)
+    const { error } = await supabase.auth.signInWithPassword({ email: authEmail, password: authPassword })
+    if (error) alert(error.message)
+    setAuthLoading(false)
+  }
+
+  const handleSignUp = async () => {
+    setAuthLoading(true)
+    const { error } = await supabase.auth.signUp({ email: authEmail, password: authPassword })
+    if (error) alert(error.message)
+    else alert('Проверьте почту для подтверждения регистрации!')
+    setAuthLoading(false)
+  }
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut()
+    setAuthEmail('')
+    setAuthPassword('')
+    setAuthPassword('')
+  }
+
+  const handleGoogleLogin = async () => {
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        queryParams: {
+          access_type: 'offline',
+          prompt: 'consent',
+        },
+      },
+    })
+    if (error) alert(error.message)
+  }
+
+  // Persist Settings (Local + DB)
+  useEffect(() => {
+    localStorage.setItem('isNightHidden', isNightHidden)
+    localStorage.setItem('workingStart', workingStart)
+    localStorage.setItem('workingEnd', workingEnd)
+
+    if (session?.user?.id) {
+      const timer = setTimeout(() => {
+        supabase.from('user_settings').upsert({
+          user_id: session.user.id,
+          working_start: workingStart,
+          working_end: workingEnd,
+          is_night_hidden: isNightHidden,
+          updated_at: new Date()
+        }).then(({ error }) => {
+          if (error) console.error('Error saving settings:', error)
+        })
+      }, 1000)
+      return () => clearTimeout(timer)
+    }
+  }, [isNightHidden, workingStart, workingEnd, session])
 
   // Состояния для модального окна
   const [isModalOpen, setIsModalOpen] = useState(false)
@@ -798,8 +995,6 @@ function App() {
   // --- TOUCH HANDLERS FOR CALENDAR TASK MOVING ---
   const handleCalendarTaskTouchStart = (e, task) => {
     if (resizingTaskState) return
-    // "Two-step" rule: Must trigger selection first. If not selected, ignore drag to allow Click to fire.
-    if (selectedCalendarTaskId !== task.id) return
 
     const touch = e.touches[0]
     const sY = touch.clientY
@@ -941,7 +1136,9 @@ function App() {
   const [duration, setDuration] = useState(60)
   const [listId, setListId] = useState(null)
   const [selectedTags, setSelectedTags] = useState([])
+  const [isProject, setIsProject] = useState(false)
   const [editingTaskId, setEditingTaskId] = useState(null) // Inline edit
+  const [isSearchOpen, setIsSearchOpen] = useState(false) // Full screen search
 
 
 
@@ -1230,13 +1427,19 @@ function App() {
       due_time: finalDueTime,
       end_date: finalEndDate,
       end_time: finalEndTime,
-      list_id: listId
+      list_id: listId,
+      is_project: isProject
     }
+
+    // Optimistic Update: Update UI immediately
+    setTasks(prev => prev.map(t => t.id === currentTaskId ? { ...t, ...taskData, tags: selectedTags } : t))
 
     try {
       const { error: updateError } = await supabase.from('tasks').update(taskData).eq('id', currentTaskId)
       if (updateError) {
         console.error('AutoSave update failed:', updateError)
+        // Revert on error? Or just log. Reverting is complex without prev state snapshot.
+        // For now, assume success. If fail, next fetch will fix it.
       }
 
       const { error: deleteTagsError } = await supabase.from('task_tags').delete().eq('task_id', currentTaskId)
@@ -1246,17 +1449,18 @@ function App() {
         const { error: insertTagsError } = await supabase.from('task_tags').insert(selectedTags.map(tag => ({ task_id: currentTaskId, tag_id: tag.id })))
         if (insertTagsError) console.error('AutoSave insert tags failed:', insertTagsError)
       }
-      setTasks(prev => prev.map(t => t.id === currentTaskId ? { ...t, ...taskData, tags: selectedTags } : t))
+
+      // No fetchData() here! We trust our optimistic update.
     } catch (e) {
       console.error('AutoSave error:', e)
     } finally {
       setTimeout(() => setIsSaving(false), 500)
     }
-  }, [currentTaskId, title, description, subtasks, priority, dueDate, dueTime, dueTimeEnd, duration, selectedTags, listId])
+  }, [currentTaskId, title, description, subtasks, priority, dueDate, dueTime, dueTimeEnd, duration, selectedTags, listId, isProject])
 
   useEffect(() => {
     if ((isModalOpen || isPanelOpen) && modalMode === 'edit') autoSave()
-  }, [debouncedTitle, debouncedDescription, debouncedPriority, debouncedDueDate, debouncedDueTime, debouncedDueTimeEnd, debouncedDuration, debouncedTags, debouncedListId])
+  }, [debouncedTitle, debouncedDescription, debouncedPriority, debouncedDueDate, debouncedDueTime, debouncedDueTimeEnd, debouncedDuration, debouncedTags, debouncedListId, isProject])
 
   // --- SYNC LOCAL STATE WITH TASKS (ONLY ON TASK SWITCH OR EXTERNAL UPDATE) ---
   useEffect(() => {
@@ -1350,6 +1554,58 @@ function App() {
           const deltaY = currentY - movingState.startY
           el.style.transform = `translate(${deltaX}px, ${deltaY}px)`
         }
+
+        // UPDATE GHOST HIGHLIGHT DIRECTLY
+        const ghostEl = document.getElementById('calendar-ghost-highlight')
+        const container = document.getElementById('week-view-container')
+        if (ghostEl && container) {
+          const rect = container.getBoundingClientRect()
+          const totalMinutes = (isNightHidden ? 15 : 24) * 60
+
+          // Col Index logic
+          // We need access to 'calendarDays'. It is in scope (useEffect dependencies).
+          const relativeX = currentX - rect.left
+          const colWidth = (rect.width - 60) / calendarDays
+          let colIndex = Math.floor((relativeX - 60) / colWidth)
+          if (colIndex < 0) colIndex = 0
+          if (colIndex >= calendarDays) colIndex = calendarDays - 1
+
+          // Vertical Logic
+          let topPct = 0
+          if (!movingState.originalTime) {
+            const relativeY = currentY - rect.top
+            const min = (relativeY / rect.height) * totalMinutes
+            const snapped = Math.max(0, Math.round(min / 30) * 30)
+            topPct = (snapped / totalMinutes) * 100
+          } else {
+            const [h, m] = movingState.originalTime.split(':').map(Number)
+            let displayOrigMin = h * 60 + m
+            if (isNightHidden) {
+              if (h < 7) displayOrigMin = 0
+              else displayOrigMin = (h - 7) * 60 + m
+            }
+            const deltaY = currentY - movingState.startY
+            const deltaMin = (deltaY / rect.height) * totalMinutes
+            const newMin = displayOrigMin + deltaMin
+            const snapped = Math.max(0, Math.round(newMin / 30) * 30)
+            topPct = (snapped / totalMinutes) * 100
+          }
+
+          // Apply Styles
+          ghostEl.style.display = 'block'
+          ghostEl.style.top = `${topPct}%`
+          ghostEl.style.height = `${(60 / totalMinutes) * 100}%` // Default 1h height
+          // Calculate Left/Width based on colIndex
+          // Column starts at 60px.
+          // Width = colWidth.
+          // Left = 60 + colIndex * colWidth
+          const leftPct = ((60 + colIndex * colWidth) / rect.width) * 100
+          const widthPct = (colWidth / rect.width) * 100
+
+          // Improve: slightly pad it
+          ghostEl.style.left = `calc(${leftPct}% + 4px)`
+          ghostEl.style.width = `calc(${widthPct}% - 8px)`
+        }
       }
 
       // SIDEBAR / PANEL RESIZE (Mouse mostly)
@@ -1437,17 +1693,24 @@ function App() {
           const currentY = movingState.currentY || movingState.startY
           const currentX = movingState.currentX || movingState.startX
 
-          const deltaY = currentY - movingState.startY
-
           // Current Time (Minutes)
-          const [h, m] = movingState.originalTime.split(':').map(Number)
-          const originalMinutes = h * 60 + m
+          // Fix: If All-Day task (no originalTime), calculate absolute time from top of grid
+          let newTotalMinutes = 0
 
-          // Delta Minutes
-          const displayedHoursCount = isNightHidden ? 15 : 24
-          const deltaMinutes = (deltaY / rect.height) * (displayedHoursCount * 60)
-
-          const newTotalMinutes = originalMinutes + deltaMinutes
+          if (!movingState.originalTime) {
+            const relativeY = currentY - rect.top
+            const displayedHoursCount = isNightHidden ? 15 : 24
+            const totalMinutes = displayedHoursCount * 60
+            newTotalMinutes = (relativeY / rect.height) * totalMinutes
+            if (isNightHidden) newTotalMinutes += (7 * 60) // Add offset if night is hidden
+          } else {
+            const deltaY = currentY - movingState.startY
+            const [h, m] = movingState.originalTime.split(':').map(Number)
+            const originalMinutes = h * 60 + m
+            const displayedHoursCount = isNightHidden ? 15 : 24
+            const deltaMinutes = (deltaY / rect.height) * (displayedHoursCount * 60)
+            newTotalMinutes = originalMinutes + deltaMinutes
+          }
 
           // Helper to snap
           const snapped = Math.max(0, Math.min(1439, Math.round(newTotalMinutes / 30) * 30))
@@ -1482,9 +1745,12 @@ function App() {
           }
         }
 
-        // Cleanup DOM transform
         const el = document.getElementById(`calendar-task-${movingState.id}`)
         if (el) el.style.transform = ''
+
+        // Hide Ghost
+        const ghostEl = document.getElementById('calendar-ghost-highlight')
+        if (ghostEl) ghostEl.style.display = 'none'
 
         setMovingTaskState(null)
       }
@@ -1563,16 +1829,31 @@ function App() {
     setDueTime(task.due_time ? task.due_time.substring(0, 5) : '');
     setDueTimeEnd(task.end_time ? task.end_time.substring(0, 5) : '');
 
-    if (task.due_time && task.end_time && task.due_date && task.end_date) {
-      const start = new Date(`${task.due_date}T${task.due_time}`)
-      const end = new Date(`${task.end_date}T${task.end_time}`)
-      setDuration(Math.round((end - start) / 60000))
-    } else {
+    try {
+      if (task.due_time && task.end_time && task.due_date) {
+        // Safe Parse
+        const d_date = task.due_date.split('T')[0]
+        const e_date = (task.end_date || task.due_date).split('T')[0]
+
+        const start = new Date(`${d_date}T${task.due_time}`)
+        const end = new Date(`${e_date}T${task.end_time}`)
+
+        if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+          setDuration(Math.round((end - start) / 60000))
+        } else {
+          setDuration(60)
+        }
+      } else {
+        setDuration(60)
+      }
+    } catch (e) {
+      console.error("Error calculating duration", e)
       setDuration(60)
     }
 
     setListId(task.list_id || null);
     setSelectedTags(task.tags || []);
+    setIsProject(task.is_project || false);
 
     if (mode === 'panel') {
       setIsPanelOpen(true);
@@ -1603,7 +1884,8 @@ function App() {
       due_time: (customTitle || !dueTime) ? null : `${dueTime}:00`,
       end_date: customTitle ? null : (endDate || dueDate || null),
       end_time: (customTitle || !dueTimeEnd) ? null : `${dueTimeEnd}:00`,
-      list_id: customTitle ? selectedListId : (listId || selectedListId)
+      list_id: customTitle ? selectedListId : (listId || selectedListId),
+      is_project: customTitle ? false : isProject
     }
 
     if (modalMode === 'create' || customTitle) {
@@ -1648,6 +1930,23 @@ function App() {
     await supabase.from('tags').insert([{ name: newTagName.trim() }]);
     setNewTagName('');
     fetchData(true);
+  }
+
+  // --- DEDICATED ACTIONS ---
+  async function handleMoveTask(newListId) {
+    // 1. Update UI Selector
+    setListId(newListId)
+    setShowProjectSelect(false)
+
+    // 2. Optimistic Update in Tasks List
+    setTasks(prev => prev.map(t => t.id === currentTaskId ? { ...t, list_id: newListId } : t))
+
+    // 3. Send Dedicated Patch Request (bypass autoSave complex logic)
+    const { error } = await supabase.from('tasks').update({ list_id: newListId }).eq('id', currentTaskId)
+
+    if (error) {
+      console.error('Move failed:', error)
+    }
   }
 
   async function deleteTask(id) {
@@ -1979,7 +2278,8 @@ function App() {
     hoveredListId, setHoveredListId,
     dragOverListInfo, setDragOverListInfo,
     dragOverFolderInfo, setDragOverFolderInfo,
-    fetchData
+    fetchData,
+    setIsSettingsOpen
   }
 
   const sortedTasks = [...tasks].filter(task => {
@@ -1992,7 +2292,7 @@ function App() {
     const today = new Date().toISOString().split('T')[0]
     const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0]
     let matchesDate = true
-    if (dateFilter === 'today') matchesDate = taskDate === today
+    if (dateFilter === 'today') matchesDate = taskDate && taskDate <= today
     if (dateFilter === 'tomorrow') matchesDate = taskDate === tomorrow
     return matchesSearch && matchesTag && matchesList && matchesDate
   }).sort((a, b) => {
@@ -2011,6 +2311,38 @@ function App() {
   })
 
   const getGroupedTasks = () => {
+    if (sortBy === 'date') {
+      const today = new Date().toISOString().split('T')[0]
+      const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0]
+
+      const bucketed = { 'Просрочено': [], 'Сегодня': [], 'Завтра': [], 'Предстоящие': [], 'Без даты': [] }
+      let order = ['Просрочено', 'Сегодня', 'Завтра', 'Предстоящие', 'Без даты']
+
+      // User request: Don't show "Tomorrow"/"Future" sections in "Today" list (redundant/separate list exists)
+      if (dateFilter === 'today') {
+        order = ['Просрочено', 'Сегодня']
+      }
+
+      sortedTasks.forEach(task => {
+        let key = 'Без даты'
+        if (task.due_date) {
+          const d = task.due_date.split('T')[0]
+          if (d < today && !task.is_completed) key = 'Просрочено'
+          else if (d === today) key = 'Сегодня'
+          else if (d === tomorrow) key = 'Завтра'
+          else if (d > today) key = 'Предстоящие'
+        }
+        if (bucketed[key]) bucketed[key].push(task)
+        else {
+          // Fallback for weird dates or completed overdue?
+          if (!bucketed['Без даты']) bucketed['Без даты'] = []
+          bucketed['Без даты'].push(task)
+        }
+      })
+
+      return order.map(key => ({ name: key, tasks: bucketed[key] })).filter(g => g.tasks.length > 0)
+    }
+
     if (groupBy === 'none') return [{ name: null, tasks: sortedTasks }]
     const groups = {}
     sortedTasks.forEach(task => {
@@ -2069,7 +2401,7 @@ function App() {
       </aside>
 
       {/* DRAWER - MOBILE */}
-      <div className={`fixed inset-y-0 left-0 w-72 bg-white shadow-2xl z-[60] transform transition duration-300 ease-in-out md:hidden ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+      <div className={`fixed inset-y-0 right-0 w-64 bg-white shadow-2xl z-[60] transform transition duration-300 ease-in-out md:hidden ${isSidebarOpen ? 'translate-x-0' : 'translate-x-full'}`}>
         <SidebarContent {...sidebarProps} />
       </div>
 
@@ -2078,39 +2410,70 @@ function App() {
       {/* MAIN VIEW */}
       <main className="flex-1 h-full flex flex-col items-stretch overflow-hidden relative">
         <div className={`${activeView === 'calendar' ? 'max-w-none p-0' : 'max-w-4xl px-2 py-4 md:px-6 md:py-8'} w-full mx-auto md:mx-0 flex flex-col flex-1 transition-all duration-500 overflow-hidden`}>
-          <header className={`flex justify-between items-center ${activeView === 'calendar' ? 'px-6 py-2 border-b border-slate-50' : 'mb-6'} gap-2`}>
-            <div className="flex items-center gap-2 flex-1 min-w-0">
-              <button onClick={() => setIsSidebarOpen(true)} className="md:hidden w-8 h-8 flex flex-col justify-center items-center gap-1 hover:bg-slate-100 rounded-lg transition active:scale-90">
-                <div className="w-5 h-0.5 bg-slate-600 rounded-full"></div>
-                <div className="w-5 h-0.5 bg-slate-600 rounded-full"></div>
-                <div className="w-5 h-0.5 bg-slate-600 rounded-full"></div>
-              </button>
-              <h1 className="text-base font-bold tracking-tight flex items-center gap-2">
-                <span className="text-slate-300">≡</span>
+          <div className={`flex justify-between items-center ${activeView === 'calendar' ? 'px-6 py-2 border-b border-slate-50' : 'mb-6 px-1'} gap-2`}>
+            <div className="flex items-center gap-3 flex-1 min-w-0">
+
+              <h1 className="text-xl font-bold tracking-tight flex items-center justify-center md:justify-start gap-2 flex-1 relative">
                 {activeView === 'calendar' ? (
-                  (() => {
-                    if (calendarDays === 1) return format(currentCalendarDate, 'd MMM yyyy', { locale: ru })
-                    let start, end
-                    if (calendarDays === 3) {
-                      start = currentCalendarDate
-                      end = addDays(currentCalendarDate, 2)
-                    } else {
-                      start = startOfWeek(currentCalendarDate, { weekStartsOn: 1 })
-                      end = endOfWeek(currentCalendarDate, { weekStartsOn: 1 })
-                    }
-                    return `${format(start, 'd MMM', { locale: ru })} - ${format(end, 'd MMM yyyy', { locale: ru })}`
-                  })()
+                  <div className="flex items-center justify-between w-full md:w-auto">
+                    {/* Mobile Prev Arrow */}
+                    <button onClick={(e) => {
+                      e.stopPropagation();
+                      if (calendarDays === 1) setCurrentCalendarDate(subDays(currentCalendarDate, 1))
+                      else setCurrentCalendarDate(subDays(currentCalendarDate, 3))
+                    }} className="md:hidden w-12 h-12 flex items-center justify-center text-slate-400 active:text-indigo-600 active:scale-95 transition text-3xl pb-1">‹</button>
+
+                    {/* Date / Today Button */}
+                    <button onClick={() => setCurrentCalendarDate(new Date())} className="text-center active:scale-95 transition flex flex-col items-center">
+                      <span className="leading-none">
+                        {(() => {
+                          if (calendarDays === 1) return format(currentCalendarDate, 'd MMM', { locale: ru })
+                          let start, end
+                          if (calendarDays === 3) {
+                            start = currentCalendarDate
+                            end = addDays(currentCalendarDate, 2)
+                          } else {
+                            start = startOfWeek(currentCalendarDate, { weekStartsOn: 1 })
+                            end = endOfWeek(currentCalendarDate, { weekStartsOn: 1 })
+                          }
+                          return `${format(start, 'd MMM', { locale: ru })} - ${format(end, 'd MMM', { locale: ru })}`
+                        })()}
+                      </span>
+                      {calendarDays === 1 && (
+                        <span className="text-[10px] text-slate-400 font-normal uppercase tracking-wider leading-none mt-0.5">
+                          {format(currentCalendarDate, 'EEEE', { locale: ru })}
+                        </span>
+                      )}
+                    </button>
+
+                    {/* Mobile Next Arrow */}
+                    <button onClick={(e) => {
+                      e.stopPropagation();
+                      if (calendarDays === 1) setCurrentCalendarDate(addDays(currentCalendarDate, 1))
+                      else setCurrentCalendarDate(addDays(currentCalendarDate, 3))
+                    }} className="md:hidden w-12 h-12 flex items-center justify-center text-slate-400 active:text-indigo-600 active:scale-95 transition text-3xl pb-1">›</button>
+                  </div>
                 ) : getHeaderTitle()}
               </h1>
-              {/* Mobile Calendar Toggle */}
-              <button
-                onClick={() => setActiveView(activeView === 'tasks' ? 'calendar' : 'tasks')}
-                className="md:hidden w-8 h-8 flex items-center justify-center bg-slate-100 rounded-full ml-auto"
-              >
-                <span className="text-sm">{activeView === 'tasks' ? '📅' : '📋'}</span>
-              </button>
             </div>
-            <div className="flex items-center gap-3">
+
+            {/* MOBILE CALENDAR CONTROLS - View Switcher Only */}
+            {activeView === 'calendar' && (
+              <div className="md:hidden flex justify-center pb-2">
+                <div className="flex bg-slate-100 rounded-xl p-1 h-9">
+                  <button onClick={() => setCalendarDays(1)} className={`px-6 text-xs font-bold rounded-lg transition flex items-center ${calendarDays === 1 ? 'bg-white shadow-sm text-black' : 'text-slate-400'}`}>1 день</button>
+                  <button onClick={() => setCalendarDays(3)} className={`px-6 text-xs font-bold rounded-lg transition flex items-center ${calendarDays === 3 ? 'bg-white shadow-sm text-black' : 'text-slate-400'}`}>3 дня</button>
+                </div>
+              </div>
+            )}
+
+            {/* DESKTOP SEARCH & TOOLS (Hidden on Mobile) */}
+            <button onClick={() => setIsSidebarOpen(true)} className="md:hidden w-8 h-8 flex flex-col justify-center items-center gap-1 hover:bg-slate-100 rounded-lg transition active:scale-90">
+              <div className="w-5 h-0.5 bg-slate-600 rounded-full"></div>
+              <div className="w-5 h-0.5 bg-slate-600 rounded-full"></div>
+              <div className="w-5 h-0.5 bg-slate-600 rounded-full"></div>
+            </button>
+            <div className="hidden md:flex items-center gap-3">
               <div className="relative flex items-center">
                 <span className="absolute left-3 text-slate-300 pointer-events-none text-xs">🔍</span>
                 <input
@@ -2118,78 +2481,93 @@ function App() {
                   placeholder="Поиск..."
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
-                  className="bg-slate-50 border-none rounded-full pl-8 pr-4 py-1.5 text-xs w-32 md:w-48 focus:w-64 focus:bg-white focus:ring-1 focus:ring-slate-200 transition-all outline-none font-medium placeholder:text-slate-300"
+                  className="bg-slate-50 border-none rounded-full pl-8 pr-4 py-1.5 text-xs w-48 focus:w-64 focus:bg-white focus:ring-1 focus:ring-slate-200 transition-all outline-none font-medium placeholder:text-slate-300"
                 />
                 {searchQuery && (
-                  <button
-                    onClick={() => setSearchQuery('')}
-                    className="absolute right-3 text-slate-300 hover:text-slate-500 transition text-[10px]"
-                  >✕</button>
+                  <button onClick={() => setSearchQuery('')} className="absolute right-3 text-slate-300 hover:text-slate-500 transition text-[10px]">✕</button>
                 )}
               </div>
-              {activeView === 'calendar' && (
-                <div className="flex items-center">
-                  {/* <button onClick={() => setIsNightHidden(!isNightHidden)} className={`mr-4 px-3 py-1 text-[9px] font-black uppercase tracking-widest rounded-lg border transition ${isNightHidden ? 'bg-indigo-50 border-indigo-200 text-indigo-600' : 'bg-white border-slate-200 text-slate-400'}`}>
-                    {isNightHidden ? '🌙 Ночь скрыта' : '☀️ Показать все'}
-                  </button> */}
-                  <div className="flex p-1 bg-slate-100 rounded-xl mr-4 h-8">
-                    <button onClick={() => {
-                      if (calendarDays === 1) setCurrentCalendarDate(subDays(currentCalendarDate, 1))
-                      else if (calendarDays === 3) setCurrentCalendarDate(subDays(currentCalendarDate, 3))
-                      else setCurrentCalendarDate(subWeeks(currentCalendarDate, 1))
-                    }} className="w-6 h-6 flex items-center justify-center hover:bg-white rounded-lg transition text-xs">←</button>
-                    <button onClick={() => setCurrentCalendarDate(new Date())} className="px-2 py-0.5 text-[9px] font-black uppercase hover:bg-white rounded-lg transition mx-1">Сегодня</button>
-                    <button onClick={() => {
-                      if (calendarDays === 1) setCurrentCalendarDate(addDays(currentCalendarDate, 1))
-                      else if (calendarDays === 3) setCurrentCalendarDate(addDays(currentCalendarDate, 3))
-                      else setCurrentCalendarDate(addWeeks(currentCalendarDate, 1))
-                    }} className="w-6 h-6 flex items-center justify-center hover:bg-white rounded-lg transition text-xs">→</button>
-                  </div>
-                  {/* View Switcher for Calendar */}
-                  <div className="flex bg-slate-100 rounded-xl p-0.5 h-8 mr-2">
-                    <button onClick={() => setCalendarDays(1)} className={`px-2 text-[10px] font-bold rounded-lg transition ${calendarDays === 1 ? 'bg-white shadow-sm text-black' : 'text-slate-400 hover:text-slate-600'}`}>1</button>
-                    <button onClick={() => setCalendarDays(3)} className={`px-2 text-[10px] font-bold rounded-lg transition ${calendarDays === 3 ? 'bg-white shadow-sm text-black' : 'text-slate-400 hover:text-slate-600'}`}>3</button>
-                    <button onClick={() => setCalendarDays(7)} className={`px-2 text-[10px] font-bold rounded-lg transition ${calendarDays === 7 ? 'bg-white shadow-sm text-black' : 'text-slate-400 hover:text-slate-600'}`}>7</button>
-                  </div>
-                </div>
-              )}
+
               <div className="relative">
                 <button
                   onClick={() => setShowSortMenu(!showSortMenu)}
-                  className={`flex items-center gap-1 text-[11px] font-bold uppercase tracking-widest px-2 py-1 rounded-lg transition ${showSortMenu || sortBy !== 'order' || groupBy !== 'none' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-400 hover:text-black'}`}
+                  className={`flex items-center gap-1 text-[11px] font-bold uppercase tracking-widest px-2 py-1 rounded-lg transition ${showSortMenu || sortBy !== 'order' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-400 hover:text-black'}`}
                 >
                   ⇅ Сортировка
                 </button>
+                {/* Sort Menu Desktop */}
                 {showSortMenu && (
-                  <>
-                    <div className="fixed inset-0 z-[105]" onClick={() => setShowSortMenu(false)}></div>
-                    <div className="absolute top-full right-0 mt-2 w-48 bg-white rounded-xl shadow-2xl border border-slate-100 p-2 z-[110] animate-in zoom-in-95 duration-200">
-                      <div className="px-3 py-1.5 text-[9px] font-black uppercase text-slate-300 tracking-tighter border-b border-slate-50 mb-1">Сортировать по</div>
-                      <button onClick={() => { setSortBy('order'); setShowSortMenu(false); }} className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition ${sortBy === 'order' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>Вручную</button>
-                      <button onClick={() => { setSortBy('title'); setShowSortMenu(false); }} className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition ${sortBy === 'title' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>Названию</button>
-                      <button onClick={() => { setSortBy('date'); setShowSortMenu(false); }} className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition ${sortBy === 'date' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>Дате</button>
-                      <button onClick={() => { setSortBy('tag'); setShowSortMenu(false); }} className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition ${sortBy === 'tag' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>Метке</button>
-
-                      <div className="px-3 py-1.5 text-[9px] font-black uppercase text-slate-300 tracking-tighter border-b border-slate-50 my-1">Группировать по</div>
-                      <button onClick={() => { setGroupBy('none'); setShowSortMenu(false); }} className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition ${groupBy === 'none' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>Нет</button>
-                      <button onClick={() => { setGroupBy('priority'); setShowSortMenu(false); }} className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition ${groupBy === 'priority' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>Приоритету</button>
-                      <button onClick={() => { setGroupBy('date'); setShowSortMenu(false); }} className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition ${groupBy === 'date' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>Дате</button>
-                    </div>
-                  </>
+                  <div className="absolute top-full right-0 mt-2 w-48 bg-white rounded-xl shadow-2xl border border-slate-100 p-2 z-[110] animate-in zoom-in-95 duration-200">
+                    {/* ... same sort menu options ... */}
+                    <button onClick={() => { setSortBy('order'); setShowSortMenu(false); }} className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition ${sortBy === 'order' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>Вручную</button>
+                    <button onClick={() => { setSortBy('title'); setShowSortMenu(false); }} className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition ${sortBy === 'title' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>Названию</button>
+                    <button onClick={() => { setSortBy('date'); setShowSortMenu(false); }} className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition ${sortBy === 'date' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>Дате</button>
+                  </div>
                 )}
               </div>
-              <button className="text-slate-400 hover:text-black transition">•••</button>
             </div>
-          </header>
+          </div>
+
+          {/* MOBILE BOTTOM NAVIGATION */}
+          {/* MOBILE BOTTOM NAVIGATION */}
+          <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-md border-t border-slate-100 px-6 py-3 flex justify-between items-center z-[90] pb-safe">
+
+            {/* 1. SORT (Moved to First) */}
+            <button
+              onClick={() => setShowSortMenu(!showSortMenu)}
+              className={`flex flex-col items-center gap-1 transition relative ${activeView === 'calendar' ? 'opacity-0 pointer-events-none' : (sortBy !== 'order' ? 'text-indigo-600' : 'text-slate-400 hover:text-black')}`}
+            >
+              <span className="text-xl">⇅</span>
+              {showSortMenu && activeView !== 'calendar' && (
+                <>
+                  <div className="fixed inset-0 z-[105]" onClick={(e) => { e.stopPropagation(); setShowSortMenu(false); }}></div>
+                  <div className="absolute bottom-full left-0 mb-4 w-48 bg-white rounded-xl shadow-2xl border border-slate-100 p-2 z-[110] animate-in slide-in-from-bottom-5 duration-200">
+                    <div className="px-3 py-1.5 text-[9px] font-black uppercase text-slate-300 tracking-tighter border-b border-slate-50 mb-1">Сортировать</div>
+                    <button onClick={() => { setSortBy('order'); setShowSortMenu(false); }} className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition ${sortBy === 'order' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>Вручную</button>
+                    <button onClick={() => { setSortBy('title'); setShowSortMenu(false); }} className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition ${sortBy === 'title' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>Названию</button>
+                    <button onClick={() => { setSortBy('date'); setShowSortMenu(false); }} className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition ${sortBy === 'date' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>Дате</button>
+                    <button onClick={() => { setSortBy('tag'); setShowSortMenu(false); }} className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition ${sortBy === 'tag' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>Тегам</button>
+                  </div>
+                </>
+              )}
+            </button>
+
+            {/* 2. SEARCH (Full Screen Trigger) */}
+            <button onClick={() => setIsSearchOpen(true)} className="flex flex-col items-center gap-1 text-slate-400 hover:text-black transition relative">
+              <span className="text-xl">🔍</span>
+              {searchQuery && <span className="absolute top-0 right-0 w-2 h-2 bg-indigo-500 rounded-full"></span>}
+            </button>
+
+            {/* 3. VIEW */}
+            <button onClick={() => {
+              if (activeView === 'tasks') {
+                setActiveView('calendar')
+              } else {
+                setActiveView('tasks')
+                setDateFilter('today')
+                setSelectedListId(null)
+                setSelectedTagId(null)
+              }
+            }} className={`flex flex-col items-center gap-1 transition ${activeView === 'calendar' ? 'text-indigo-600' : 'text-slate-400 hover:text-black'}`}>
+              <span className="text-xl">{activeView === 'tasks' ? '📅' : '📋'}</span>
+            </button>
+
+            {/* 4. MENU (Moved to Last/Right) */}
+            <button onClick={() => setIsSidebarOpen(true)} className="flex flex-col items-center gap-1 text-slate-400 hover:text-black transition">
+              <span className="text-xl">☰</span>
+            </button>
+          </div>
+
 
           {activeView === 'tasks' ? (
             <>
               <div className="mb-4">
-                <input type="text" placeholder="+ Новая задача" className="w-full text-[15px] placeholder:text-slate-300 border-none bg-[#F4F4F4] rounded-lg px-4 py-2 outline-none focus:bg-white focus:ring-1 focus:ring-slate-200 transition font-sans"
+                <input type="text" placeholder="+ Новая задача" className="w-full text-[15px] placeholder:text-slate-300 border-none bg-[#F4F4F4] rounded-lg px-4 py-3 outline-none focus:bg-white focus:ring-1 focus:ring-slate-200 transition font-sans shadow-sm"
                   onKeyDown={e => { if (e.key === 'Enter' && e.target.value.trim()) { saveTask(e.target.value); e.target.value = ''; } }} />
               </div>
 
-              <div className="flex-1 overflow-y-auto pr-2 no-scrollbar">
+              <div className="flex-1 overflow-y-auto pr-2 no-scrollbar pb-24">
+                {/* Added padding-bottom for bottom nav */}
                 {loading && tasks.length === 0 ? (
                   <div className="text-center py-20 text-slate-300 text-sm">Обновление...</div>
                 ) : sortedTasks.length === 0 ? (
@@ -2287,6 +2665,7 @@ function App() {
                                   setDraggedTaskId(task.id);
                                 }}
                                 onDragEnd={(e) => {
+                                  setDraggedTaskId(null);
                                   setDropPosition(null);
                                 }}
                               >⋮⋮</div>
@@ -2318,13 +2697,18 @@ function App() {
                                   />
                                 ) : (
                                   <p
-                                    className={`leading-tight transition cursor-text truncate ${task.is_completed ? 'line-through text-slate-400' : 'text-[#333]'} ${hasSubtasks ? 'uppercase font-bold tracking-wide text-xs' : 'text-[15px]'}`}
+                                    className={`leading-tight transition cursor-text truncate ${task.is_completed ? 'line-through text-slate-400' : 'text-[#333]'} ${hasSubtasks || task.is_project ? 'uppercase font-bold tracking-wide text-xs' : 'text-[15px]'}`}
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      setEditingTaskId(task.id);
-                                      openTaskDetail(task, 'panel');
+                                      if (window.innerWidth < 1024) {
+                                        openTaskDetail(task, 'modal');
+                                      } else {
+                                        setEditingTaskId(task.id);
+                                        openTaskDetail(task, 'panel');
+                                      }
                                     }}
                                   >
+                                    {task.is_project && <span className="mr-1 inline-flex items-center justify-center w-5 h-5 bg-indigo-100 rounded text-[10px] grayscale-0">🚀</span>}
                                     {(task.title || '').match(/https?:\/\/[^\s]+/) ? (
                                       <span dangerouslySetInnerHTML={{
                                         __html: (task.title || '').replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" class="text-indigo-600 hover:underline" onclick="event.stopPropagation()">$1</a>')
@@ -2364,10 +2748,10 @@ function App() {
                                       onTouchEnd={() => handleTaskTouchEnd(subtask.id)}
                                       onClick={(e) => {
                                         e.stopPropagation();
-                                        if (window.innerWidth >= 1024) {
-                                          openTaskDetail(subtask, 'panel');
-                                        } else {
+                                        if (window.innerWidth < 1024) {
                                           openTaskDetail(subtask, 'modal');
+                                        } else {
+                                          openTaskDetail(subtask, 'panel');
                                         }
                                       }}
                                       onContextMenu={(e) => handleContextMenu(e, subtask)}
@@ -2513,10 +2897,14 @@ function App() {
                   setSelectedCalendarTaskId(null)
                   return
                 }
-                if (selectedCalendarTaskId === task.id) {
-                  openTaskDetail(task, 'panel')
+                if (window.innerWidth < 1024) {
+                  openTaskDetail(task, 'modal');
                 } else {
-                  setSelectedCalendarTaskId(task.id)
+                  if (selectedCalendarTaskId === task.id) {
+                    openTaskDetail(task, 'panel')
+                  } else {
+                    setSelectedCalendarTaskId(task.id)
+                  }
                 }
               }}
               onDropTaskOnCalendar={onDropTaskOnCalendar}
@@ -2531,6 +2919,8 @@ function App() {
               handleCalendarTaskTouchStart={handleCalendarTaskTouchStart}
               handleCalendarTaskTouchMove={handleCalendarTaskTouchMove}
               handleCalendarTaskTouchEnd={handleCalendarTaskTouchEnd}
+              workingStart={workingStart}
+              workingEnd={workingEnd}
             />
           )}
         </div>
@@ -2723,7 +3113,7 @@ function App() {
                         onClick={() => { setShowProjectSelect(!showProjectSelect); setShowTagSelect(false); }}
                         className={`px-4 py-3 rounded-xl border text-[11px] font-bold transition flex items-center gap-2 ${listId ? 'bg-slate-100 border-slate-200 text-slate-700' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}>
                         <span>📁</span>
-                        {listId ? allLists.find(l => l.id === listId)?.name : 'Проект'}
+                        {listId ? allLists.find(l => l.id === listId)?.name : 'Список'}
                         <span className="opacity-50 text-[10px] ml-1">▼</span>
                       </button>
 
@@ -2732,7 +3122,7 @@ function App() {
                           ref={projectSelectRef}
                           className="absolute bottom-full left-0 mb-2 w-64 bg-white rounded-xl shadow-2xl border border-slate-100 p-2 z-50 max-h-60 overflow-y-auto transform origin-bottom animate-in zoom-in-95 duration-200">
                           <button onClick={() => { setListId(null); setShowProjectSelect(false); }} className="w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition flex items-center gap-2 text-slate-600">
-                            <span>📥</span> Входящие
+                            <span>📥</span> Личное
                           </button>
                           {allLists.map(list => (
                             <button key={list.id} onClick={() => { setListId(list.id); setShowProjectSelect(false); }} className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition flex items-center gap-2 ${listId === list.id ? 'bg-slate-100 text-black' : 'text-slate-600'}`}>
@@ -2783,6 +3173,21 @@ function App() {
                     >
                       <span>{priority === 'high' ? '🚩' : '🏁'}</span>
                       <span>Флаг</span>
+                    </button>
+
+                    {/* PROJECT TOGGLE (AS CHECKBOX) */}
+                    <button
+                      onClick={() => setIsProject(!isProject)}
+                      className={`px-4 py-3 rounded-xl border text-[11px] font-bold transition flex items-center gap-3 ${isProject ? 'bg-indigo-50 border-indigo-100 text-indigo-600' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}
+                      title="Пометить задачу как проект (многошаговое действие)"
+                    >
+                      <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition ${isProject ? 'bg-indigo-500 border-indigo-500 text-white' : 'border-slate-300'}`}>
+                        {isProject && <span className="text-[10px]">✓</span>}
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span>🚀</span>
+                        <span>Проект</span>
+                      </div>
                     </button>
                   </div>
                   <div className="flex items-center gap-1">
@@ -2879,7 +3284,7 @@ function App() {
       {/* Floating Action Button (Mobile) */}
       <button onClick={() => {
         setModalMode('create'); setTitle(''); setDescription(''); setPriority('low'); setDueDate(''); setListId(selectedListId); setSelectedTags([]); setIsModalOpen(true);
-      }} className="fixed bottom-8 right-8 w-14 h-14 bg-black text-white rounded-full shadow-lg md:hidden flex items-center justify-center text-3xl font-light active:scale-95 transition z-40">
+      }} className="fixed bottom-24 right-6 w-14 h-14 bg-black/80 backdrop-blur-sm text-white rounded-full shadow-lg md:hidden flex items-center justify-center text-3xl font-light active:scale-95 transition z-40">
         <span className="mb-1">+</span>
       </button>
 
@@ -2906,16 +3311,14 @@ function App() {
         )
       }
 
-      {/* MODAL: TASK DETAIL */}
+      {/* MODAL: TASK DETAIL (MOBILE BOTTOM DRAWER) */}
       {
         isModalOpen && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/30 backdrop-blur-sm sm:p-6" onClick={() => closeModal()}>
-            <div className="bg-[#FDFDFD] w-full h-full sm:h-auto sm:max-w-2xl sm:rounded-3xl shadow-2xl flex flex-col overflow-hidden transition-all duration-300 ease-out"
-              style={{ transform: `translateY(${dragOffset}px)`, opacity: isDragging ? 0.95 : 1, overscrollBehavior: 'contain' }}
+          <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-[2px] transition-all duration-500" onClick={() => closeModal()}>
+            <div className="bg-white w-full h-[85vh] sm:h-auto sm:max-w-2xl sm:rounded-3xl rounded-t-[40px] shadow-2xl flex flex-col overflow-hidden transition-all duration-700 ease-[cubic-bezier(0.32,0.72,0,1)] animate-in slide-in-from-bottom-full duration-700"
+              style={{ transform: `translateY(${dragOffset}px)`, opacity: isDragging ? 0.9 : 1, overscrollBehavior: 'contain' }}
               onClick={e => {
                 e.stopPropagation();
-                // Close DatePicker if clicking outside of it (and outside the toggle button)
-                // This works because datePickerRef is attached to a div, not the functional component
                 if (showDatePicker &&
                   datePickerRef.current && !datePickerRef.current.contains(e.target) &&
                   (!datePickerBtnRef.current || !datePickerBtnRef.current.contains(e.target))) {
@@ -2926,28 +3329,34 @@ function App() {
               onTouchMove={handleTouchMove}
               onTouchEnd={handleTouchEnd}
             >
-              <div className="w-10 h-1 bg-slate-200 rounded-full mx-auto mt-3 sm:hidden"></div>
+              {/* Drag Handle for Mobile */}
+              <div className="w-12 h-1.5 bg-slate-200 rounded-full mx-auto mt-4 mb-2 shrink-0 sm:hidden"></div>
 
-              <div className="flex items-center justify-between p-6 sm:px-10 border-b border-slate-100">
-                <button onClick={() => closeModal()} className="text-slate-400 hover:text-black transition flex items-center gap-1 text-sm">
-                  <span className="text-lg">←</span> Назад
-                </button>
-                <div className="relative flex items-center gap-3">
-                  {isSaving && <span className="text-[10px] text-indigo-400 animate-pulse">Сохранение...</span>}
-                  <button onClick={() => saveTask()} className="bg-black text-white px-6 py-2 rounded-full text-sm font-bold hover:bg-slate-800 transition">Готово</button>
-                </div>
-              </div>
-
-              <div className="flex-1 p-8 sm:p-12 overflow-y-auto no-scrollbar modal-scroll-area">
-                <input
-                  type="text"
+              {/* TOP SECTION: Title Only */}
+              <div className="px-8 pt-4 pb-2 sm:px-12 border-b border-slate-50 relative">
+                {isSaving && <div className="absolute top-1 right-8 text-[9px] text-indigo-400 animate-pulse font-black uppercase tracking-widest">Сохранение...</div>}
+                <textarea
                   placeholder="Что нужно сделать?"
-                  className="w-full text-3xl font-bold placeholder:text-slate-100 border-none focus:ring-0 p-0 mb-6 text-black outline-none bg-transparent"
+                  className="w-full text-2xl sm:text-3xl font-bold placeholder:text-slate-100 border-none focus:ring-0 p-0 mb-2 mt-2 text-black outline-none bg-transparent leading-tight resize-none overflow-hidden"
                   value={title}
-                  onChange={e => setTitle(e.target.value)}
+                  onChange={e => {
+                    setTitle(e.target.value);
+                    e.target.style.height = 'auto';
+                    e.target.style.height = e.target.scrollHeight + 'px';
+                  }}
+                  rows={1}
+                  style={{ height: 'auto' }}
+                  ref={el => {
+                    if (el) {
+                      el.style.height = 'auto';
+                      el.style.height = el.scrollHeight + 'px';
+                    }
+                  }}
                   autoFocus={modalMode === 'create'}
                 />
+              </div>
 
+              <div className="flex-1 p-8 sm:px-12 overflow-y-auto no-scrollbar modal-scroll-area">
                 <textarea
                   placeholder="Детали задачи..."
                   className="w-full text-[15px] text-slate-500 placeholder:text-slate-200 border-none focus:ring-0 p-0 resize-none h-40 outline-none mb-8 leading-relaxed bg-transparent"
@@ -2987,6 +3396,25 @@ function App() {
 
                 <div className="space-y-8">
                   <div className="flex flex-col gap-6">
+                    {showDatePicker && (
+                      <div ref={datePickerRef} className="animate-in fade-in zoom-in-95 duration-200 flex justify-center mb-4">
+                        <DatePicker
+                          dueDate={dueDate}
+                          setDueDate={setDueDate}
+                          endDate={endDate}
+                          setEndDate={setEndDate}
+                          dueTime={dueTime}
+                          setDueTime={setDueTime}
+                          dueTimeEnd={dueTimeEnd}
+                          setDueTimeEnd={setDueTimeEnd}
+                          duration={duration}
+                          setDuration={setDuration}
+                          onClose={() => setShowDatePicker(false)}
+                          onSave={() => autoSave()}
+                        />
+                      </div>
+                    )}
+
                     <div className="flex gap-2">
                       <button
                         ref={datePickerBtnRef}
@@ -3003,49 +3431,30 @@ function App() {
                       </button>
                     </div>
 
-                    {showDatePicker && (
-                      <div ref={datePickerRef} className="mt-4 animate-in fade-in zoom-in-95 duration-200 flex justify-center">
-                        <DatePicker
-                          dueDate={dueDate}
-                          setDueDate={setDueDate}
-                          endDate={endDate}
-                          setEndDate={setEndDate}
-                          dueTime={dueTime}
-                          setDueTime={setDueTime}
-                          dueTimeEnd={dueTimeEnd}
-                          setDueTimeEnd={setDueTimeEnd}
-                          duration={duration}
-                          setDuration={setDuration}
-                          onClose={() => setShowDatePicker(false)}
-                          onSave={() => saveTask()}
-                        />
-                      </div>
-                    )}
-
-                    <div className="flex gap-2 pt-2">
-                      {/* PROJECT SELECTOR */}
-                      <div className="relative">
+                    <div className="flex gap-2">
+                      {/* LIST SELECTOR */}
+                      <div className="relative flex-1">
                         <button
                           onClick={() => { setShowProjectSelect(!showProjectSelect); setShowTagSelect(false); }}
-                          className={`px-4 py-3 rounded-xl border text-xs font-bold transition flex items-center gap-2 ${listId ? 'bg-black border-black text-white' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}
+                          className={`w-full px-4 py-3 rounded-xl border text-xs font-bold transition flex items-center gap-2 ${listId ? 'bg-slate-100 border-slate-200 text-slate-700' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}
                         >
                           <span>📁</span>
-                          {listId ? allLists.find(l => l.id === listId)?.name : 'Проект'}
+                          {listId ? allLists.find(l => l.id === listId)?.name : 'Список'}
                           <span className="opacity-50 text-[10px] ml-1">▼</span>
                         </button>
 
                         {showProjectSelect && (
                           <div className="absolute bottom-full left-0 mb-2 w-64 bg-white rounded-xl shadow-2xl border border-slate-100 p-2 z-50 max-h-60 overflow-y-auto transform origin-bottom animate-in zoom-in-95 duration-200">
                             <button
-                              onClick={() => { setListId(null); setShowProjectSelect(false); }}
+                              onClick={() => handleMoveTask(null)}
                               className="w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition flex items-center gap-2 text-slate-600"
                             >
-                              <span>📥</span> Входящие
+                              <span>📥</span> Личное
                             </button>
                             {allLists.map(list => (
                               <button
                                 key={list.id}
-                                onClick={() => { setListId(list.id); setShowProjectSelect(false); }}
+                                onClick={() => handleMoveTask(list.id)}
                                 className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition flex items-center gap-2 ${listId === list.id ? 'bg-slate-100 text-black' : 'text-slate-600'}`}
                               >
                                 <span>{list.name.toUpperCase().includes('ЦЕЛИ') ? '⭐' : list.name.toUpperCase().includes('КУПИТЬ') ? '🛒' : '📁'}</span>
@@ -3057,10 +3466,10 @@ function App() {
                       </div>
 
                       {/* TAG SELECTOR */}
-                      <div className="relative">
+                      <div className="relative flex-1">
                         <button
                           onClick={() => { setShowTagSelect(!showTagSelect); setShowProjectSelect(false); }}
-                          className={`px-4 py-3 rounded-xl border text-xs font-bold transition flex items-center gap-2 ${selectedTags.length > 0 ? 'bg-black border-black text-white' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}
+                          className={`w-full px-4 py-3 rounded-xl border text-xs font-bold transition flex items-center gap-2 ${selectedTags.length > 0 ? 'bg-slate-100 border-slate-200 text-slate-700' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}
                         >
                           <span>🏷️</span>
                           {selectedTags.length > 0 ? `${selectedTags.length} меток` : 'Метки'}
@@ -3088,38 +3497,218 @@ function App() {
                         )}
                       </div>
                     </div>
+
+                    <div className="flex gap-2 items-stretch">
+                      <button
+                        onClick={() => setIsProject(!isProject)}
+                        className={`flex-1 flex items-center justify-center gap-3 py-3 rounded-xl border text-xs font-bold transition ${isProject ? 'bg-indigo-50 border-indigo-100 text-indigo-600' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}
+                      >
+                        <div className={`w-4 h-4 rounded border flex items-center justify-center transition ${isProject ? 'bg-indigo-500 border-indigo-500 text-white' : 'border-slate-300'}`}>
+                          {isProject && <span className="text-[10px]">✓</span>}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span>🚀</span>
+                          <span>Проект</span>
+                        </div>
+                      </button>
+                      <button
+                        onClick={() => deleteTask(currentTaskId)}
+                        className="w-14 flex items-center justify-center rounded-xl border border-slate-200 text-slate-300 hover:text-red-500 hover:bg-red-50 transition"
+                        title="Удалить задачу"
+                      >
+                        <span className="text-lg">🗑️</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              {/* STICKY FOOTER */}
-              <div className="p-4 sm:px-10 border-t border-slate-100 bg-white flex items-center justify-between shrink-0">
-                <button
-                  onClick={() => deleteTask(currentTaskId)}
-                  className="flex items-center gap-2 px-4 py-3 text-slate-300 hover:text-red-500 transition font-bold text-[10px] uppercase tracking-widest hover:bg-red-50 rounded-xl"
-                  title="Удалить задачу"
-                >
-                  <span className="text-sm">🗑️</span>
-                </button>
-
-                <div className="flex items-center gap-4">
-                  {isSaving && <span className="text-[10px] text-indigo-400 animate-pulse font-bold">СОХРАНЕНИЕ...</span>}
-                  <button onClick={() => saveTask()} className="bg-black text-white px-8 py-3 rounded-xl text-sm font-bold hover:bg-slate-800 transition shadow-lg shadow-indigo-500/20">
-                    Готово
-                  </button>
-                </div>
               </div>
             </div>
           </div>
         )
       }
 
+      {/* FULL SCREEN SEARCH OVERLAY */}
+      {isSearchOpen && (
+        <div className="fixed inset-0 bg-white z-[200] flex flex-col animate-in fade-in duration-200">
+          <div className="flex items-center gap-2 p-4 border-b border-slate-100">
+            <button onClick={() => setIsSearchOpen(false)} className="w-10 h-10 flex items-center justify-center text-slate-400 hover:text-black transition active:scale-95">
+              <span className="text-2xl">←</span>
+            </button>
+            <div className="flex-1 relative">
+              <input
+                autoFocus
+                type="text"
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                placeholder="Поиск..."
+                className="w-full bg-slate-100 rounded-full px-5 py-3 text-lg outline-none font-medium placeholder:text-slate-300"
+              />
+              {searchQuery && (
+                <button onClick={() => setSearchQuery('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">✕</button>
+              )}
+            </div>
+          </div>
+          <div className="flex-1 overflow-y-auto p-4 content-start">
+            {!searchQuery ? (
+              <div className="flex flex-col items-center justify-center h-64 text-slate-300 gap-4">
+                <span className="text-6xl">🔍</span>
+                <span className="text-sm font-medium">Введите запрос...</span>
+              </div>
+            ) : sortedTasks.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-64 text-slate-300 gap-4">
+                <span className="text-6xl">🤷‍♂️</span>
+                <span className="text-sm font-medium">Ничего не найдено</span>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {sortedTasks.map(task => (
+                  <div key={task.id} onClick={() => { setIsSearchOpen(false); openTaskDetail(task, window.innerWidth < 1024 ? 'modal' : 'panel'); }} className="bg-white border border-slate-100 rounded-xl p-4 shadow-sm hover:border-indigo-500 transition cursor-pointer">
+                    <div className="text-base font-bold text-slate-800 mb-1">{task.title}</div>
+                    {task.description && <div className="text-xs text-slate-400 line-clamp-2">{task.description}</div>}
+                    <div className="flex gap-2 mt-2">
+                      {task.due_date && <span className="text-[10px] bg-slate-100 text-slate-500 px-2 py-1 rounded">📅 {new Date(task.due_date).toLocaleDateString()}</span>}
+                      {task.tags && task.tags.map(t => <span key={t.id} className="text-[10px] bg-indigo-50 text-indigo-600 px-2 py-1 rounded">#{t.name}</span>)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <style>{`
         .vertical-text {
           writing-mode: vertical-rl;
           transform: rotate(180deg);
         }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        
+        .custom-scrollbar::-webkit-scrollbar { width: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 5px; border: 2px solid transparent; background-clip: content-box; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background-color: #94a3b8; }
       `}</style>
+      {/* SETTINGS MODAL */}
+      {isSettingsOpen && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm transition-opacity" onClick={() => setIsSettingsOpen(false)}></div>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden z-[210] animate-in zoom-in-95 duration-200">
+            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+              <h3 className="font-bold text-lg text-slate-800">Настройки</h3>
+              <button onClick={() => setIsSettingsOpen(false)} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-slate-200 text-slate-400 transition">✕</button>
+            </div>
+            <div className="p-6 space-y-6">
+
+              {/* Account Section */}
+              <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">Аккаунт</h4>
+                {session ? (
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium text-slate-700 truncate max-w-[150px]">{session.user.email}</span>
+                    <button onClick={handleLogout} className="text-xs text-red-500 hover:text-red-700 font-bold">Выйти</button>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <input
+                      type="email"
+                      placeholder="Email"
+                      value={authEmail}
+                      onChange={e => setAuthEmail(e.target.value)}
+                      className="w-full text-sm px-3 py-2 border border-slate-200 rounded-lg outline-none focus:border-indigo-500 transition"
+                    />
+                    <input
+                      type="password"
+                      placeholder="Пароль"
+                      value={authPassword}
+                      onChange={e => setAuthPassword(e.target.value)}
+                      className="w-full text-sm px-3 py-2 border border-slate-200 rounded-lg outline-none focus:border-indigo-500 transition"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        onClick={handleLogin}
+                        disabled={authLoading}
+                        className="flex-1 py-1.5 bg-indigo-600 text-white text-xs font-bold rounded-lg hover:bg-indigo-700 transition disabled:opacity-50"
+                      >
+                        {authLoading ? '...' : 'Войти'}
+                      </button>
+                      <button
+                        onClick={handleSignUp}
+                        disabled={authLoading}
+                        className="flex-1 py-1.5 bg-white border border-slate-200 text-slate-600 text-xs font-bold rounded-lg hover:bg-slate-50 transition disabled:opacity-50"
+                      >
+                        Регистрация
+                      </button>
+                    </div>
+                    <button
+                      onClick={handleGoogleLogin}
+                      className="w-full mt-2 py-1.5 bg-white border border-slate-200 text-slate-600 text-xs font-bold rounded-lg hover:bg-slate-50 transition flex items-center justify-center gap-2"
+                    >
+                      <img src="https://www.svgrepo.com/show/475656/google-color.svg" className="w-4 h-4" alt="G" />
+                      Войти через Google
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Toggle Hide Non-Working */}
+              <div className="flex items-center justify-between">
+                <div className="flex flex-col">
+                  <span className="font-bold text-sm text-slate-700">Скрыть нерабочее время</span>
+                  <span className="text-[11px] text-slate-400">Показывать часы только с {workingStart}:00 до {workingEnd}:00</span>
+                </div>
+                <button
+                  onClick={() => setIsNightHidden(!isNightHidden)}
+                  className={`w-12 h-6 rounded-full transition-colors relative ${isNightHidden ? 'bg-indigo-600' : 'bg-slate-200'}`}
+                >
+                  <div className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform shadow-sm ${isNightHidden ? 'translate-x-6' : 'translate-x-0'}`}></div>
+                </button>
+              </div>
+
+              <div className="border-t border-slate-100 my-4"></div>
+
+              {/* Working Hours Inputs */}
+              <div className="space-y-4">
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-400">Рабочие часы</label>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <span className="text-xs text-slate-500 font-medium ml-1">Начало</span>
+                    <input
+                      type="number"
+                      min="0" max="23"
+                      value={workingStart}
+                      onChange={e => setWorkingStart(Number(e.target.value))}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold text-center focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-xs text-slate-500 font-medium ml-1">Конец</span>
+                    <input
+                      type="number"
+                      min="0" max="24"
+                      value={workingEnd}
+                      onChange={e => setWorkingEnd(Number(e.target.value))}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold text-center focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition"
+                    />
+                  </div>
+                </div>
+              </div>
+
+            </div>
+            <div className="p-4 bg-slate-50 border-t border-slate-100 flex justify-end">
+              <button
+                onClick={() => setIsSettingsOpen(false)}
+                className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-sm transition shadow-lg shadow-indigo-200"
+              >
+                Готово
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <style jsx global>{`
         @keyframes fade-in-up {
           from { opacity: 0; transform: translateY(10px); }
@@ -3130,7 +3719,7 @@ function App() {
         }
 
       `}</style>
-    </div >
+    </div>
   )
 }
 
