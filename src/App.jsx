@@ -1,5 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
+import confetti from 'canvas-confetti'
 import { supabase } from './supabase'
+import { GoogleGenerativeAI } from '@google/generative-ai'
 import {
   format,
   startOfMonth,
@@ -17,7 +19,8 @@ import {
   startOfDay,
   endOfDay,
   isToday,
-  isSameMonth
+  isSameMonth,
+  parseISO
 } from 'date-fns'
 import { ru } from 'date-fns/locale'
 import DatePicker from './components/DatePicker'
@@ -50,11 +53,22 @@ const SidebarContent = ({
   setActiveView, activeView
 }) => {
   const today = new Date().getDate()
+  const [expandedTaskIds, setExpandedTaskIds] = useState({});
   const days = ['пн.', 'вт.', 'ср.', 'чт.', 'пт.', 'сб.', 'вс.']
 
   return (
     <div className="h-full flex flex-col bg-[#F9F9F9] border-r border-slate-200 font-sans text-[#333]">
       <div className="flex-1 overflow-y-auto pt-6 no-scrollbar">
+        {/* APP LOGO */}
+        <div className="px-6 mb-8 flex items-center gap-2 select-none">
+          <div className="w-6 h-6 bg-red-600 rounded-lg flex items-center justify-center text-white shadow-lg shadow-red-200">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M4 12h4l3-6 4 12 3-6h2" />
+            </svg>
+          </div>
+          <span className="text-lg font-black tracking-tight text-slate-800">PULSE</span>
+        </div>
+
         {/* Смарт-списки */}
         <div className="px-3 space-y-0.5 mb-8">
           {[
@@ -641,12 +655,19 @@ function App() {
   const [loading, setLoading] = useState(true)
   const [dropPosition, setDropPosition] = useState(null) // 'top' | 'bottom'
   const [isSaving, setIsSaving] = useState(false)
+  const [aiSuggestion, setAiSuggestion] = useState(null)
+  const [suggestVersion, setSuggestVersion] = useState(0)
+  const [isAiLoading, setIsAiLoading] = useState(false)
   const lastFetchedTasksJson = useRef('')
 
   // Фильтрация
   const [selectedTagId, setSelectedTagId] = useState(null)
   const [selectedListId, setSelectedListId] = useState(null)
   const [dateFilter, setDateFilter] = useState(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [sortBy, setSortBy] = useState('order') // 'order', 'title', 'date', 'tag'
+  const [groupBy, setGroupBy] = useState('none') // 'none', 'priority', 'date'
+  const [showSortMenu, setShowSortMenu] = useState(false)
   const [activeView, setActiveView] = useState('tasks') // 'tasks' or 'calendar'
   const [currentCalendarDate, setCurrentCalendarDate] = useState(new Date())
   const [hourHeight, setHourHeight] = useState(60)
@@ -661,6 +682,7 @@ function App() {
   const tagSelectBtnRef = useRef(null)
   const projectSelectRef = useRef(null)
   const projectSelectBtnRef = useRef(null)
+  const tagSelectRef = useRef(null)
 
   const [showDatePicker, setShowDatePicker] = useState(false)
   const [showEndDatePicker, setShowEndDatePicker] = useState(false)
@@ -715,6 +737,51 @@ function App() {
   // Calendar View Mode: 1, 3, or 7 days
   const [calendarDays, setCalendarDays] = useState(window.innerWidth < 768 ? 1 : 7)
   const [selectedCalendarTaskId, setSelectedCalendarTaskId] = useState(null)
+
+  // Animation State for Exiting Tasks
+  const [exitingTaskIds, setExitingTaskIds] = useState([]);
+  const [expandedTaskIds, setExpandedTaskIds] = useState({});
+  const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, taskId: null });
+
+  const handleTaskCompletion = (e, task) => {
+    e.stopPropagation()
+    if (task.is_completed) {
+      // If un-completing, just toggle immediately
+      toggleTask(task.id, task.is_completed)
+      return
+    }
+
+    // Fireworks
+    const rect = e.target.getBoundingClientRect()
+    const x = (rect.left + rect.width / 2) / window.innerWidth
+    const y = (rect.top + rect.height / 2) / window.innerHeight
+
+    try {
+      confetti({
+        origin: { x, y },
+        particleCount: 60,
+        spread: 70,
+        startVelocity: 20,
+        gravity: 2,
+        ticks: 150,
+        colors: ['#26ccff', '#a25afd', '#ff5e7e', '#88ff5a', '#fcff42', '#ffa62d', '#ff36ff'],
+        disableForReducedMotion: true,
+        zIndex: 1000,
+        scalar: 0.6
+      })
+    } catch (err) {
+      console.error("Confetti failed:", err)
+    }
+
+    // Fly Away Animation triggers
+    setExitingTaskIds(prev => [...prev, task.id])
+
+    // Wait for animation then toggle
+    setTimeout(() => {
+      toggleTask(task.id, task.is_completed)
+      setExitingTaskIds(prev => prev.filter(id => id !== task.id))
+    }, 700)
+  }
 
   useEffect(() => {
     const handleResize = () => {
@@ -884,6 +951,69 @@ function App() {
   const [isAnimatingOut, setIsAnimatingOut] = useState(false)
   const startY = useRef(0)
 
+  const handleAiSuggest = async () => {
+    if (!title) return
+    setIsAiLoading(true)
+    setAiSuggestion(null)
+    try {
+      const apiKey = import.meta.env.VITE_GEMINI_KEY || import.meta.env.VITE_GOOGLE_API_KEY
+      if (!apiKey) {
+        alert('API Key not found. Please check VITE_GEMINI_KEY in .env')
+        setIsAiLoading(false)
+        return
+      }
+      const genAI = new GoogleGenerativeAI(apiKey)
+      // MODEL DEFINITION: Change model name here (e.g., "gemini-2.5-flash", "gemini-2.5-pro")
+      const model = genAI.getGenerativeModel({ model: "gemini-2.5-pro" })
+      const prompt = `Task: ${title}\nDescription: ${description}\n\nSuggest the single most important immediate next step to complete this task. Keep it short, actionable, and encouraging. Answer in Russian.`
+
+      const result = await model.generateContent(prompt)
+      const response = await result.response
+      const text = response.text()
+      setAiSuggestion(text)
+    } catch (error) {
+      console.error("AI Error:", error)
+      alert(`Ошибка AI: ${error.message}`)
+    } finally {
+      setIsAiLoading(false)
+    }
+  }
+
+  const handleApplySuggestion = async () => {
+    if (!aiSuggestion || !currentTaskId) return
+
+    // Create subtask
+    try {
+      const { data, error } = await supabase.from('tasks').insert([
+        {
+          title: aiSuggestion.replace(/^[\s\-\*]+/, ''), // clean bullets 
+          parent_id: currentTaskId,
+          list_id: listId, // Inherit project
+          user_id: (await supabase.auth.getUser()).data.user?.id,
+          created_at: new Date().toISOString()
+        }
+      ]).select()
+
+      if (error) throw error
+
+      // Update local state is tricky because subtasks might be fetched separately.
+      // But we can verify by re-fetching or updating tasks list locally if available.
+      // Easiest is to force refresh or update subtasks list if it's local.
+      // But here we rely on 'tasks' state. 
+      // Let's just create a local representation and add it.
+      if (data && data[0]) {
+        // Optionally notify user
+        setAiSuggestion(null) // clear suggestion
+        fetchData(true) // refresh tasks to show new subtask
+      }
+
+    } catch (e) {
+      console.error("Apply Error:", e)
+      alert("Не удалось создать подзадачу")
+    }
+  }
+
+
   const debouncedTitle = useDebounce(title, 300)
   const debouncedDescription = useDebounce(description, 300)
   const debouncedPriority = useDebounce(priority, 300)
@@ -1010,7 +1140,7 @@ function App() {
     if (!currentTask) return;
 
     if (direction === 'right') {
-      const parentCandidateList = filteredTasks.filter(t => !t.parent_id || !filteredTasks.some(pt => pt.id === t.parent_id));
+      const parentCandidateList = tasks.filter(t => !t.parent_id || !tasks.some(pt => pt.id === t.parent_id));
       const idx = parentCandidateList.findIndex(t => String(t.id) === String(taskId));
       if (idx > 0) {
         onDropTaskOnTask(taskId, parentCandidateList[idx - 1].id);
@@ -1520,11 +1650,84 @@ function App() {
     fetchData(true);
   }
 
+  async function deleteTask(id) {
+    if (confirm('Удалить эту задачу?')) {
+      const { error } = await supabase.from('tasks').delete().eq('id', id)
+      if (error) {
+        console.error('Delete failed:', error)
+      } else {
+        setTasks(prev => prev.filter(t => t.id !== id))
+        if (currentTaskId === id) {
+          setCurrentTaskId(null)
+          setIsModalOpen(false)
+        }
+      }
+    }
+  }
+
   async function toggleTask(id, isCompleted) {
     setTasks(tasks.map(t => t.id === id ? { ...t, is_completed: !isCompleted } : t))
     await supabase.from('tasks').update({ is_completed: !isCompleted }).eq('id', id)
     fetchData(true)
   }
+
+  async function createSubtask() {
+    if (!currentTaskId) return;
+    const parentTask = tasks.find(t => t.id === currentTaskId);
+    if (!parentTask) return;
+
+    const newSubtask = {
+      title: 'Новая подзадача',
+      parent_id: currentTaskId,
+      list_id: parentTask.list_id,
+      is_completed: false
+    };
+
+    // Optimistic update
+    const tempId = 'temp-' + Date.now();
+    setTasks(prev => [...prev, { ...newSubtask, id: tempId, created_at: new Date().toISOString() }]);
+
+    const { data, error } = await supabase.from('tasks').insert([newSubtask]).select();
+    if (error) {
+      console.error('Failed to create subtask:', error);
+      setTasks(prev => prev.filter(t => t.id !== tempId)); // Revert
+    } else if (data) {
+      setTasks(prev => prev.map(t => t.id === tempId ? data[0] : t));
+    }
+  }
+
+  async function handleDuplicateTask(taskId) {
+    const taskToDuplicate = tasks.find(t => t.id === taskId);
+    if (!taskToDuplicate) return;
+
+    const { id, created_at, ...taskData } = taskToDuplicate;
+    const newTask = { ...taskData, title: taskData.title + ' (Копия)', is_completed: false };
+
+    // Optimistic
+    const tempId = 'dup-' + Date.now();
+    setTasks(prev => [...prev, { ...newTask, id: tempId, created_at: new Date().toISOString() }]);
+
+    const { data, error } = await supabase.from('tasks').insert([newTask]).select();
+    if (error) {
+      console.error('Duplicate failed:', error);
+      setTasks(prev => prev.filter(t => t.id !== tempId));
+    } else if (data) {
+      setTasks(prev => prev.map(t => t.id === tempId ? data[0] : t));
+      // Also duplicate subtasks? User didn't ask explicitly, but usually yes. 
+      // For now, let's keep it simple (shallow duplicate) or Complexity 10.
+      // Shallow duplicate is safer for now to avoid complexity explosion.
+    }
+  }
+
+  const handleContextMenu = (e, task) => {
+    e.preventDefault();
+    setContextMenu({
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      taskId: task.id
+    });
+  };
 
   // --- INLINE EDITING ---
   const handleTaskTitleBlur = async (task, newTitle) => {
@@ -1769,7 +1972,8 @@ function App() {
       }
       fetchData(true)
 
-      await supabase.from('lists').update({ order_index: newOrder, folder_id: targetList.folder_id }).eq('id', draggedId)
+
+      fetchData(true)
       fetchData(true)
     },
     hoveredListId, setHoveredListId,
@@ -1778,7 +1982,10 @@ function App() {
     fetchData
   }
 
-  const filteredTasks = tasks.filter(task => {
+  const sortedTasks = [...tasks].filter(task => {
+    const matchesSearch = !searchQuery ||
+      (task.title || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (task.description && task.description.toLowerCase().includes(searchQuery.toLowerCase()))
     const matchesList = selectedListId ? task.list_id === selectedListId : (dateFilter || selectedTagId ? true : task.list_id === null)
     const matchesTag = !selectedTagId || (task.tags && task.tags.some(tag => tag.id === selectedTagId))
     const taskDate = task.due_date ? task.due_date.split('T')[0] : null
@@ -1787,8 +1994,47 @@ function App() {
     let matchesDate = true
     if (dateFilter === 'today') matchesDate = taskDate === today
     if (dateFilter === 'tomorrow') matchesDate = taskDate === tomorrow
-    return matchesTag && matchesList && matchesDate
+    return matchesSearch && matchesTag && matchesList && matchesDate
+  }).sort((a, b) => {
+    if (sortBy === 'title') return a.title.localeCompare(b.title)
+    if (sortBy === 'date') {
+      if (!a.due_date) return 1
+      if (!b.due_date) return -1
+      return new Date(a.due_date) - new Date(b.due_date)
+    }
+    if (sortBy === 'tag') {
+      const tagA = a.tags?.[0]?.name || ''
+      const tagB = b.tags?.[0]?.name || ''
+      return tagA.localeCompare(tagB)
+    }
+    return (a.order_index || 0) - (b.order_index || 0) || a.id - b.id
   })
+
+  const getGroupedTasks = () => {
+    if (groupBy === 'none') return [{ name: null, tasks: sortedTasks }]
+    const groups = {}
+    sortedTasks.forEach(task => {
+      let key = 'Без группы'
+      if (groupBy === 'priority') {
+        key = task.priority === 'high' ? '🚩 Важные' : '🏁 Обычные'
+      } else if (groupBy === 'date') {
+        if (!task.due_date) key = 'Без даты'
+        else {
+          const d = new Date(task.due_date).toLocaleDateString()
+          const today = new Date().toLocaleDateString()
+          const tomorrow = new Date(Date.now() + 86400000).toLocaleDateString()
+          if (d === today) key = 'Сегодня'
+          else if (d === tomorrow) key = 'Завтра'
+          else key = d
+        }
+      }
+      if (!groups[key]) groups[key] = []
+      groups[key].push(task)
+    })
+    return Object.entries(groups).map(([name, tasks]) => ({ name, tasks }))
+  }
+
+  const groupedTasks = getGroupedTasks()
 
   return (
     <div className="h-screen bg-white flex font-sans text-[#333] overflow-hidden selection:bg-indigo-100 relative">
@@ -1831,7 +2077,7 @@ function App() {
 
       {/* MAIN VIEW */}
       <main className="flex-1 h-full flex flex-col items-stretch overflow-hidden relative">
-        <div className={`${activeView === 'calendar' ? 'max-w-none p-0' : 'max-w-4xl p-4 md:p-8'} w-full mx-auto md:mx-0 flex flex-col flex-1 transition-all duration-500 overflow-hidden`}>
+        <div className={`${activeView === 'calendar' ? 'max-w-none p-0' : 'max-w-4xl px-2 py-4 md:px-6 md:py-8'} w-full mx-auto md:mx-0 flex flex-col flex-1 transition-all duration-500 overflow-hidden`}>
           <header className={`flex justify-between items-center ${activeView === 'calendar' ? 'px-6 py-2 border-b border-slate-50' : 'mb-6'} gap-2`}>
             <div className="flex items-center gap-2 flex-1 min-w-0">
               <button onClick={() => setIsSidebarOpen(true)} className="md:hidden w-8 h-8 flex flex-col justify-center items-center gap-1 hover:bg-slate-100 rounded-lg transition active:scale-90">
@@ -1865,6 +2111,22 @@ function App() {
               </button>
             </div>
             <div className="flex items-center gap-3">
+              <div className="relative flex items-center">
+                <span className="absolute left-3 text-slate-300 pointer-events-none text-xs">🔍</span>
+                <input
+                  type="text"
+                  placeholder="Поиск..."
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  className="bg-slate-50 border-none rounded-full pl-8 pr-4 py-1.5 text-xs w-32 md:w-48 focus:w-64 focus:bg-white focus:ring-1 focus:ring-slate-200 transition-all outline-none font-medium placeholder:text-slate-300"
+                />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-3 text-slate-300 hover:text-slate-500 transition text-[10px]"
+                  >✕</button>
+                )}
+              </div>
               {activeView === 'calendar' && (
                 <div className="flex items-center">
                   {/* <button onClick={() => setIsNightHidden(!isNightHidden)} className={`mr-4 px-3 py-1 text-[9px] font-black uppercase tracking-widest rounded-lg border transition ${isNightHidden ? 'bg-indigo-50 border-indigo-200 text-indigo-600' : 'bg-white border-slate-200 text-slate-400'}`}>
@@ -1891,7 +2153,31 @@ function App() {
                   </div>
                 </div>
               )}
-              <button className="text-slate-400 hover:text-black transition">⇅</button>
+              <div className="relative">
+                <button
+                  onClick={() => setShowSortMenu(!showSortMenu)}
+                  className={`flex items-center gap-1 text-[11px] font-bold uppercase tracking-widest px-2 py-1 rounded-lg transition ${showSortMenu || sortBy !== 'order' || groupBy !== 'none' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-400 hover:text-black'}`}
+                >
+                  ⇅ Сортировка
+                </button>
+                {showSortMenu && (
+                  <>
+                    <div className="fixed inset-0 z-[105]" onClick={() => setShowSortMenu(false)}></div>
+                    <div className="absolute top-full right-0 mt-2 w-48 bg-white rounded-xl shadow-2xl border border-slate-100 p-2 z-[110] animate-in zoom-in-95 duration-200">
+                      <div className="px-3 py-1.5 text-[9px] font-black uppercase text-slate-300 tracking-tighter border-b border-slate-50 mb-1">Сортировать по</div>
+                      <button onClick={() => { setSortBy('order'); setShowSortMenu(false); }} className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition ${sortBy === 'order' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>Вручную</button>
+                      <button onClick={() => { setSortBy('title'); setShowSortMenu(false); }} className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition ${sortBy === 'title' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>Названию</button>
+                      <button onClick={() => { setSortBy('date'); setShowSortMenu(false); }} className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition ${sortBy === 'date' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>Дате</button>
+                      <button onClick={() => { setSortBy('tag'); setShowSortMenu(false); }} className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition ${sortBy === 'tag' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>Метке</button>
+
+                      <div className="px-3 py-1.5 text-[9px] font-black uppercase text-slate-300 tracking-tighter border-b border-slate-50 my-1">Группировать по</div>
+                      <button onClick={() => { setGroupBy('none'); setShowSortMenu(false); }} className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition ${groupBy === 'none' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>Нет</button>
+                      <button onClick={() => { setGroupBy('priority'); setShowSortMenu(false); }} className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition ${groupBy === 'priority' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>Приоритету</button>
+                      <button onClick={() => { setGroupBy('date'); setShowSortMenu(false); }} className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition ${groupBy === 'date' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>Дате</button>
+                    </div>
+                  </>
+                )}
+              </div>
               <button className="text-slate-400 hover:text-black transition">•••</button>
             </div>
           </header>
@@ -1906,224 +2192,314 @@ function App() {
               <div className="flex-1 overflow-y-auto pr-2 no-scrollbar">
                 {loading && tasks.length === 0 ? (
                   <div className="text-center py-20 text-slate-300 text-sm">Обновление...</div>
-                ) : filteredTasks.length === 0 ? (
+                ) : sortedTasks.length === 0 ? (
                   <div className="py-24 flex flex-col items-center opacity-20">
                     <span className="text-6xl mb-4">🎑</span>
                     <p className="text-xs uppercase tracking-widest text-slate-500">Список пуст</p>
                   </div>
                 ) : (
-                  <div className="space-y-0"
+                  <div className="space-y-6"
                     onDragOver={e => e.preventDefault()}
                     onDrop={e => {
                       const taskId = e.dataTransfer.getData('taskId');
                       if (taskId) onRemoveParent(taskId);
                     }}>
 
-                    {filteredTasks.filter(t => {
-                      // Show as top-level if it has no parent OR its parent is not in the filtered list
-                      if (!t.parent_id) return true
-                      return !filteredTasks.some(pt => pt.id === t.parent_id)
-                    }).map(task => (
-                      <div key={task.id}>
-                        <div
-                          style={{
-                            transform: swipeTaskId === task.id ? `translateX(${swipeOffset}px)` : 'none',
-                            transition: swipeTaskId === task.id ? 'none' : 'transform 0.2s ease-out'
-                          }}
-                          className={`group flex items-start gap-3 py-3 border-b border-slate-50 transition-all 
-                                ${dragOverTaskId === task.id ? (dropPosition === 'top' ? 'border-t-2 border-t-indigo-500' : 'border-b-2 border-b-indigo-500') : ''}  
-                          `}
-                          onClick={(e) => {
-                            if (window.innerWidth >= 1024) return; // Desktop: managed by inline/button
-                            // Mobile: open modal if not clicking controls
-                            openTaskDetail(task, 'modal');
-                          }}
-                        >
-                          {/* Drag Handle */}
-                          <div
-                            draggable="true"
-                            className={`opacity-0 group-hover:opacity-100 text-slate-300 hover:text-slate-500 transition px-2 w-6 select-none flex items-center justify-center h-full pt-1 
-                               ${draggedTaskId && String(draggedTaskId) !== String(task.id) ? 'pointer-events-none' : 'cursor-grab active:cursor-grabbing'}
-                             `}
-                            onDragStart={(e) => {
-                              e.dataTransfer.setData('taskId', task.id);
-                              e.dataTransfer.effectAllowed = 'move';
-                              setDraggedTaskId(task.id);
-                            }}
-                            onDragEnd={(e) => {
-                              setDraggedTaskId(null);
-                            }}
-                          >⋮⋮</div>
+                    {groupedTasks.map((group, gIdx) => {
+                      const isTopLevel = (t) => (!t.parent_id || !group.tasks.some(pt => pt.id === t.parent_id));
+                      const activeTasks = group.tasks.filter(t => !t.is_completed && isTopLevel(t));
+                      const completedTasks = group.tasks.filter(t => t.is_completed && isTopLevel(t));
 
-                          <div onClick={(e) => { e.stopPropagation(); toggleTask(task.id, task.is_completed); }}
-                            className={`mt-1 w-5 h-5 rounded border transition-all duration-200 shrink-0 flex items-center justify-center cursor-pointer ${task.is_completed ? 'bg-slate-200 border-slate-200' : 'border-slate-300 hover:border-slate-500'}`}>
-                            {task.is_completed && <span className="text-[#666] text-[10px] font-bold">✓</span>}
-                          </div>
+                      // Toggle state for this specific group's completed section
+                      // We'll use a local state emulator or modify App state.
+                      // Since we can't maintain state inside this map easily without a component,
+                      // we'll default to 'open' or use the global state 'collapsedGroups' logic for now?
+                      // User wanted the button at the BOTTOM.
+                      // We'll use the 'collapsedFolders' state to track completed visibility per group index?
+                      // Or just always show?
+                      // Let's use a dummy toggle for now -> actually we need state.
+                      // We'll use the 'collapsedFolders' with a prefix like 'completed-GROUPNAME' to track state.
+                      const groupKey = `completed-${gIdx}`;
+                      const isCompletedOpen = collapsedFolders[groupKey]; // Default false/undefined -> Collapsed? User said "collapsed list".
+                      // Let's make it collapsed by default (undefined = false).
 
-                          <div className="flex-1 min-w-0"
-                            draggable="true" // Allow dragging body too if needed, but per request better on handle. Let's keep body drag OFF for text selectability unless mobile.
-                            onDragStart={(e) => {
-                              // Optional: Allow body drag too? User specifically asked for handle to enable drag. 
-                              // Let's Disable body drag to allow text selection more easily, OR keep it but use handle for primary.
-                              // If user wants valid text selection, body sort-drag is annoying.
-                              if (window.innerWidth < 1024) { // Mobile drag logic usually Long Press
-                                // Default mobile logic
-                              } else {
-                                e.preventDefault(); // Disable drag on body for Desktop to allow text select/click
-                              }
-                            }}
-                            // Drag Target Logic needs to remain on the container or handle?
-                            // Actually the DROP ZONE is the ROW.
-                            onDragOver={e => {
-                              e.preventDefault();
-                              if (draggedTaskId && String(draggedTaskId) !== String(task.id)) {
-                                const rect = e.currentTarget.parentElement.getBoundingClientRect(); // Use Row Rect
-                                const y = e.clientY - rect.top;
-                                const isTop = y < rect.height / 2;
-                                setDragOverTaskId(task.id);
-                              }
-                            }}
-                            onDrop={e => {
-                              e.stopPropagation();
-                              const draggedId = e.dataTransfer.getData('taskId');
-                              if (draggedId && dragOverTaskId && dropPosition) {
-                                sidebarProps.onDropTaskReorder(e, dragOverTaskId, dropPosition);
-                              } else if (draggedId) {
-                                onDropTaskOnTask(draggedId, task.id);
-                              }
-                              setDragOverTaskId(null);
-                              setDropPosition(null);
-                            }}
-                          >
-                            {editingTaskId === task.id ? (
-                              <input
-                                autoFocus
-                                className="w-full bg-transparent border-none outline-none p-0 text-[15px] leading-tight font-sans text-slate-700"
-                                defaultValue={task.title}
-                                onFocus={() => openTaskDetail(task, 'panel')}
-                                onBlur={(e) => handleTaskTitleBlur(task, e.target.value)}
-                                onKeyDown={(e) => handleTaskTitleKeyDown(e, task)}
-                                onClick={(e) => e.stopPropagation()}
-                              />
-                            ) : (
-                              <p
-                                className={`text-[15px] leading-tight transition cursor-text ${task.is_completed ? 'line-through text-slate-400' : 'text-[#333]'}`}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setEditingTaskId(task.id);
-                                  openTaskDetail(task, 'panel');
-                                }}
-                              >
-                                {task.title.match(/https?:\/\/[^\s]+/) ? (
-                                  <span dangerouslySetInnerHTML={{
-                                    __html: task.title.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" class="text-indigo-600 hover:underline" onclick="event.stopPropagation()">$1</a>')
-                                  }} />
-                                ) : task.title}
-                              </p>
-                            )}
+                      const renderTaskItem = (task) => {
+                        const hasSubtasks = group.tasks.some(st => st.parent_id === task.id);
+                        const isExpanded = expandedTaskIds[task.id];
 
-                            {(task.due_date || (task.tags && task.tags.length > 0)) && (
-                              <div className="flex flex-wrap gap-2 mt-1 text-[11px] font-medium text-slate-400 cursor-pointer" onClick={() => openTaskDetail(task, 'panel')}>
-                                {task.due_date && <span>📅 {new Date(task.due_date).toLocaleDateString()}</span>}
-                                {task.tags?.map(t => <span key={t.id} className="text-slate-300">#{t.name}</span>)}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                        {/* Render Subtasks ONLY if they are active in the current filter */}
-                        {
-                          filteredTasks.filter(st => st.parent_id === task.id).map(subtask => (
-                            <div key={subtask.id}
-                              draggable="true"
-                              onDragStart={(e) => {
-                                e.dataTransfer.setData('taskId', subtask.id);
-                                e.dataTransfer.effectAllowed = 'move';
-                                e.currentTarget.classList.add('opacity-30');
-                                setDraggedTaskId(subtask.id);
-                              }}
-                              onDragEnd={(e) => {
-                                e.currentTarget.classList.remove('opacity-30');
-                                setDraggedTaskId(null);
-                              }}
-                              onTouchStart={(e) => handleTaskTouchStart(e, subtask.id)}
-                              onTouchMove={(e) => handleTaskTouchMove(e, subtask.id)}
-                              onTouchEnd={() => handleTaskTouchEnd(subtask.id)}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (window.innerWidth >= 1024) {
-                                  openTaskDetail(subtask, 'panel');
-                                } else {
-                                  openTaskDetail(subtask, 'modal');
-                                }
-                              }}
-                              onDoubleClick={(e) => {
-                                e.stopPropagation();
-                                if (window.innerWidth >= 1024) {
-                                  openTaskDetail(subtask, 'modal');
-                                }
-                              }}
+                        return (
+                          <div key={task.id}>
+                            <div
                               style={{
-                                transform: swipeTaskId === subtask.id ? `translateX(${swipeOffset}px)` : 'none',
-                                transition: swipeTaskId === subtask.id ? 'none' : 'transform 0.2s ease-out'
+                                transform: swipeTaskId === task.id ? `translateX(${swipeOffset}px)` : 'none',
+                                transition: swipeTaskId === task.id ? 'none' : 'transform 0.2s ease-out'
                               }}
-                              className={`group flex items-start gap-2 py-2 border-b border-slate-50/50 cursor-pointer hover:bg-slate-50/30 transition-colors ml-8
-                                ${dragOverTaskId === subtask.id ? (dropPosition === 'top' ? 'border-t-2 border-t-indigo-500' : 'border-b-2 border-b-indigo-500') : ''}  
-                              `}
+                              className={`group flex items-center gap-0 min-h-[2.5rem] border-b border-slate-50 transition-all duration-700 ease-in-out relative hover:bg-slate-50
+                                ${dragOverTaskId === task.id ? 'bg-slate-50/50' : ''}
+                                ${exitingTaskIds.includes(task.id) ? 'translate-y-24 opacity-0 scale-95 pointer-events-none' : ''}
+                          `}
+                              onContextMenu={(e) => handleContextMenu(e, task)}
                               onDragOver={e => {
                                 e.preventDefault();
-                                if (draggedTaskId && String(draggedTaskId) !== String(subtask.id)) {
+                                if (draggedTaskId && String(draggedTaskId) !== String(task.id)) {
                                   const rect = e.currentTarget.getBoundingClientRect();
                                   const y = e.clientY - rect.top;
                                   const isTop = y < rect.height / 2;
-                                  setDragOverTaskId(subtask.id);
+                                  setDragOverTaskId(task.id);
                                   setDropPosition(isTop ? 'top' : 'bottom');
                                 }
+                              }}
+                              onDragLeave={() => {
+                                setDragOverTaskId(null);
+                                setDropPosition(null);
                               }}
                               onDrop={e => {
                                 e.stopPropagation();
                                 const draggedId = e.dataTransfer.getData('taskId');
-                                if (draggedId && dragOverTaskId && dropPosition) {
-                                  sidebarProps.onDropTaskReorder(e, dragOverTaskId, dropPosition);
-                                } else if (draggedId) {
-                                  onDropTaskOnTask(draggedId, subtask.id);
+                                if (draggedId) {
+                                  if (dragOverTaskId && dropPosition) {
+                                    sidebarProps.onDropTaskReorder(e, dragOverTaskId, dropPosition);
+                                  } else if (dragOverTaskId) {
+                                    onDropTaskOnTask(draggedId, task.id)
+                                  }
                                 }
                                 setDragOverTaskId(null);
                                 setDropPosition(null);
                               }}
+                              onClick={(e) => {
+                                if (window.innerWidth >= 1024) return;
+                                openTaskDetail(task, 'modal');
+                              }}
                             >
-                              {/* Drag Handle for Subtasks */}
+                              {dragOverTaskId === task.id && dropPosition && (
+                                <div className={`absolute left-0 right-0 h-0.5 bg-indigo-500 z-30 rounded-full ${dropPosition === 'top' ? '-top-[1px]' : '-bottom-[1px]'}`}>
+                                  <div className="absolute left-0 -top-1 w-2 h-2 rounded-full bg-indigo-500 border-2 border-white"></div>
+                                </div>
+                              )}
                               <div
                                 draggable="true"
-                                className={`opacity-0 group-hover:opacity-100 text-slate-300 hover:text-slate-500 transition px-1 w-4 select-none flex items-center justify-center h-full pt-0.5
-                                    ${draggedTaskId && String(draggedTaskId) !== String(subtask.id) ? 'pointer-events-none' : 'cursor-grab active:cursor-grabbing'}
-                                 `}
+                                className={`opacity-0 group-hover:opacity-100 text-slate-300 hover:text-slate-500 transition w-6 select-none flex items-center justify-center shrink-0 cursor-grab active:cursor-grabbing
+                                ${draggedTaskId && String(draggedTaskId) !== String(task.id) ? 'pointer-events-none' : ''}
+                              `}
                                 onDragStart={(e) => {
-                                  e.dataTransfer.setData('taskId', subtask.id);
+                                  e.dataTransfer.setData('taskId', task.id);
                                   e.dataTransfer.effectAllowed = 'move';
-                                  setDraggedTaskId(subtask.id);
-                                  e.stopPropagation();
+                                  setDraggedTaskId(task.id);
                                 }}
-                                onDragEnd={() => {
-                                  setDraggedTaskId(null);
+                                onDragEnd={(e) => {
+                                  setDropPosition(null);
                                 }}
                               >⋮⋮</div>
 
-                              <div onClick={(e) => { e.stopPropagation(); toggleTask(subtask.id, subtask.is_completed); }}
-                                className={`mt-0.5 w-4 h-4 rounded border transition-all duration-200 shrink-0 flex items-center justify-center ${subtask.is_completed ? 'bg-slate-100 border-slate-100' : 'border-slate-200 hover:border-slate-400'}`}>
-                                {subtask.is_completed && <span className="text-slate-400 text-[8px] font-bold">✓</span>}
+                              {/* TOGGLE ARROW */}
+                              {hasSubtasks ? (
+                                <div onClick={(e) => { e.stopPropagation(); setExpandedTaskIds(prev => ({ ...prev, [task.id]: !prev[task.id] })); }} className="w-4 h-full flex items-center justify-center cursor-pointer text-slate-300 hover:text-indigo-600 z-10">
+                                  <span className={`text-[8px] transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`}>▶</span>
+                                </div>
+                              ) : (
+                                <div className="w-4"></div>
+                              )}
+
+                              <div onClick={(e) => handleTaskCompletion(e, task)}
+                                className={`w-5 h-5 rounded border transition-all duration-200 shrink-0 flex items-center justify-center cursor-pointer mr-2 ${task.is_completed ? 'bg-slate-200 border-slate-200' : 'border-slate-300 hover:border-slate-500'}`}>
+                                {task.is_completed && <span className="text-[#666] text-[10px] font-bold">✓</span>}
                               </div>
+
                               <div className="flex-1 min-w-0">
-                                <p className={`text-sm leading-tight transition ${subtask.is_completed ? 'line-through text-slate-300' : 'text-slate-600'}`}>
-                                  {subtask.title}
-                                </p>
+                                {editingTaskId === task.id ? (
+                                  <input
+                                    autoFocus
+                                    className="w-full bg-transparent border-none outline-none p-0 text-[15px] leading-tight font-sans text-slate-700"
+                                    defaultValue={task.title}
+                                    onFocus={() => openTaskDetail(task, 'panel')}
+                                    onBlur={(e) => handleTaskTitleBlur(task, e.target.value)}
+                                    onKeyDown={(e) => handleTaskTitleKeyDown(e, task)}
+                                    onClick={(e) => e.stopPropagation()}
+                                  />
+                                ) : (
+                                  <p
+                                    className={`leading-tight transition cursor-text truncate ${task.is_completed ? 'line-through text-slate-400' : 'text-[#333]'} ${hasSubtasks ? 'uppercase font-bold tracking-wide text-xs' : 'text-[15px]'}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setEditingTaskId(task.id);
+                                      openTaskDetail(task, 'panel');
+                                    }}
+                                  >
+                                    {(task.title || '').match(/https?:\/\/[^\s]+/) ? (
+                                      <span dangerouslySetInnerHTML={{
+                                        __html: (task.title || '').replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" class="text-indigo-600 hover:underline" onclick="event.stopPropagation()">$1</a>')
+                                      }} />
+                                    ) : (task.title || '')}
+                                  </p>
+                                )}
+
+                                {(task.due_date || (task.tags && task.tags.length > 0)) && (
+                                  <div className="flex flex-wrap gap-2 mt-1 text-[11px] font-medium text-slate-400 cursor-pointer" onClick={() => openTaskDetail(task, 'panel')}>
+                                    {task.due_date && <span>📅 {new Date(task.due_date).toLocaleDateString()}</span>}
+                                    {task.tags?.map(t => <span key={t.id} className="text-slate-300">#{t.name}</span>)}
+                                  </div>
+                                )}
                               </div>
                             </div>
-                          ))
-                        }
-                      </div>
-                    ))}
+
+                            {/* Render Subtasks (Collapsible) */}
+                            {isExpanded && (
+                              <div className="animate-in slide-in-from-top-1 duration-200">
+                                {group.tasks.filter(st => st.parent_id && task.id && String(st.parent_id) === String(task.id)).map(subtask => (
+                                  <div key={subtask.id}>
+                                    <div
+                                      draggable="true"
+                                      onDragStart={(e) => {
+                                        e.dataTransfer.setData('taskId', subtask.id);
+                                        e.dataTransfer.effectAllowed = 'move';
+                                        e.currentTarget.classList.add('opacity-30');
+                                        setDraggedTaskId(subtask.id);
+                                      }}
+                                      onDragEnd={(e) => {
+                                        e.currentTarget.classList.remove('opacity-30');
+                                        setDraggedTaskId(null);
+                                      }}
+                                      onTouchStart={(e) => handleTaskTouchStart(e, subtask.id)}
+                                      onTouchMove={(e) => handleTaskTouchMove(e, subtask.id)}
+                                      onTouchEnd={() => handleTaskTouchEnd(subtask.id)}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        if (window.innerWidth >= 1024) {
+                                          openTaskDetail(subtask, 'panel');
+                                        } else {
+                                          openTaskDetail(subtask, 'modal');
+                                        }
+                                      }}
+                                      onContextMenu={(e) => handleContextMenu(e, subtask)}
+                                      style={{
+                                        transform: swipeTaskId === subtask.id ? `translateX(${swipeOffset}px)` : 'none',
+                                        transition: swipeTaskId === subtask.id ? 'none' : 'transform 0.2s ease-out'
+                                      }}
+                                      className={`group flex items-start gap-2 py-2 border-b border-slate-50/50 cursor-pointer hover:bg-slate-50/30 transition-colors ml-8 relative
+                                    ${dragOverTaskId === subtask.id ? 'bg-slate-50/50' : ''}
+                                  `}
+                                      onDragOver={e => {
+                                        e.preventDefault();
+                                        if (draggedTaskId && String(draggedTaskId) !== String(subtask.id)) {
+                                          const rect = e.currentTarget.getBoundingClientRect();
+                                          const y = e.clientY - rect.top;
+                                          const isTop = y < rect.height / 2;
+                                          setDragOverTaskId(subtask.id);
+                                          setDropPosition(isTop ? 'top' : 'bottom');
+                                        }
+                                      }}
+                                      onDragLeave={() => {
+                                        setDragOverTaskId(null);
+                                        setDropPosition(null);
+                                      }}
+                                      onDrop={e => {
+                                        e.stopPropagation();
+                                        const draggedId = e.dataTransfer.getData('taskId');
+                                        if (draggedId && dragOverTaskId && dropPosition) {
+                                          sidebarProps.onDropTaskReorder(e, dragOverTaskId, dropPosition);
+                                        } else if (draggedId) {
+                                          onDropTaskOnTask(draggedId, subtask.id);
+                                        }
+                                        setDragOverTaskId(null);
+                                        setDropPosition(null);
+                                      }}
+                                    >
+                                      {dragOverTaskId === subtask.id && dropPosition && (
+                                        <div className={`absolute left-0 right-0 h-0.5 bg-indigo-500 z-30 rounded-full ${dropPosition === 'top' ? '-top-[1px]' : '-bottom-[1px]'}`}>
+                                          <div className="absolute left-8 -top-1 w-2 h-2 rounded-full bg-indigo-500 border-2 border-white"></div>
+                                        </div>
+                                      )}
+                                      <div
+                                        draggable="true"
+                                        className={`opacity-0 group-hover:opacity-100 text-slate-300 hover:text-slate-500 transition px-1 w-4 select-none flex items-center justify-center h-full pt-0.5
+                                        ${draggedTaskId && String(draggedTaskId) !== String(subtask.id) ? 'pointer-events-none' : 'cursor-grab active:cursor-grabbing'}
+                                     `}
+                                        onDragStart={(e) => {
+                                          e.dataTransfer.setData('taskId', subtask.id);
+                                          e.dataTransfer.effectAllowed = 'move';
+                                          setDraggedTaskId(subtask.id);
+                                          e.stopPropagation();
+                                        }}
+                                        onDragEnd={() => {
+                                          setDraggedTaskId(null);
+                                          setDragOverTaskId(null);
+                                          setDropPosition(null);
+                                        }}
+                                      >⋮⋮</div>
+
+                                      <div onClick={(e) => { e.stopPropagation(); toggleTask(subtask.id, subtask.is_completed); }}
+                                        className={`mt-0.5 w-4 h-4 rounded border transition-all duration-200 shrink-0 flex items-center justify-center ${subtask.is_completed ? 'bg-slate-100 border-slate-100' : 'border-slate-200 hover:border-slate-400'}`}>
+                                        {subtask.is_completed && <span className="text-slate-400 text-[8px] font-bold">✓</span>}
+                                      </div>
+                                      <div className="flex-1 min-w-0">
+                                        <p className={`text-sm leading-tight transition truncate ${subtask.is_completed ? 'line-through text-slate-300' : 'text-slate-600'}`}>
+                                          {subtask.title}
+                                        </p>
+                                      </div>
+                                    </div>
+
+                                    {/* LEVEL 3 SUBTASKS */}
+                                    {group.tasks.filter(st3 => st3.parent_id && subtask.id && String(st3.parent_id) === String(subtask.id)).map(sub3 => (
+                                      <div key={sub3.id}
+                                        draggable="true"
+                                        onContextMenu={(e) => handleContextMenu(e, sub3)}
+                                        className="group flex items-start gap-2 py-2 border-b border-slate-50/50 cursor-pointer hover:bg-slate-50/30 transition-colors ml-16 relative"
+                                        onClick={(e) => { e.stopPropagation(); openTaskDetail(sub3, 'panel'); }}
+                                      >
+                                        <div className="w-4"></div>
+                                        <div onClick={(e) => { e.stopPropagation(); toggleTask(sub3.id, sub3.is_completed); }}
+                                          className={`mt-0.5 w-3.5 h-3.5 rounded border transition-all duration-200 shrink-0 flex items-center justify-center ${sub3.is_completed ? 'bg-slate-100 border-slate-100' : 'border-slate-200 hover:border-slate-400'}`}>
+                                          {sub3.is_completed && <span className="text-slate-400 text-[8px] font-bold">✓</span>}
+                                        </div>
+                                        <span className={`text-xs leading-tight transition truncate ${sub3.is_completed ? 'line-through text-slate-300' : 'text-slate-500'}`}>{sub3.title}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      };
+                      return (
+                        <div key={gIdx} className="space-y-1">
+                          {group.name && (
+                            <div className="flex items-center gap-2 mb-3">
+                              <div className="h-[1px] flex-1 bg-slate-100"></div>
+                              <span className="text-[10px] font-black uppercase tracking-widest text-slate-300">{group.name}</span>
+                              <div className="h-[1px] flex-1 bg-slate-100"></div>
+                            </div>
+                          )}
+
+                          {/* ACTIVE */}
+                          {activeTasks.filter(t => !group.tasks.some(p => p.id === t.parent_id)).map(renderTaskItem)}
+
+                          {/* COMPLETED SECTION (Button at Bottom) */}
+                          {completedTasks.length > 0 && (
+                            <div className="mt-auto pt-4 flex flex-col relative">
+
+                              {isCompletedOpen && (
+                                <div className="space-y-1 mb-2 pl-0 opacity-70 animate-in slide-in-from-top-2 duration-300">
+                                  {completedTasks.filter(t => !group.tasks.some(p => p.id === t.parent_id)).map(renderTaskItem)}
+                                </div>
+                              )}
+
+                              <button
+                                onClick={() => setCollapsedFolders(prev => ({ ...prev, [groupKey]: !prev[groupKey] }))}
+                                className="sticky bottom-0 z-10 w-full bg-white/90 backdrop-blur-sm border-t border-slate-50 flex items-center justify-center gap-2 cursor-pointer select-none text-slate-400 hover:text-indigo-600 transition py-3 text-[10px] font-bold uppercase tracking-widest outline-none shadow-sm"
+                              >
+                                <span className={`transition-transform duration-200 text-[10px] ${isCompletedOpen ? 'rotate-180' : ''}`}>▼</span>
+                                <span>{isCompletedOpen ? 'Скрыть выполненные' : 'Показать выполненные'}</span>
+                                <span className="bg-slate-100 px-1.5 py-0.5 rounded-full text-slate-500">{completedTasks.length}</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
                   </div>
-                )}
+                )
+                }
               </div>
             </>
           ) : (
@@ -2164,7 +2540,7 @@ function App() {
       {/* TASK DETAIL PANEL */}
       <aside
         style={{ width: `${panelWidth}px` }}
-        className="hidden lg:flex flex-col flex-shrink-0 border-l border-slate-100 bg-white sticky top-0 h-screen overflow-hidden animate-panel group/panel z-20 shadow-xl"
+        className={`${activeView === 'calendar' ? 'hidden' : 'hidden lg:flex'} flex-col flex-shrink-0 border-l border-slate-100 bg-white sticky top-0 h-screen overflow-hidden animate-panel group/panel z-20 shadow-xl`}
         onClick={e => {
           // Close DatePicker if clicking outside of it (and outside the toggle button)
           if (showDatePicker &&
@@ -2202,20 +2578,46 @@ function App() {
             <div className="flex flex-col h-full bg-white relative">
               {/* FIXED HEADER: Title & Meta */}
               <div className="p-6 border-b border-slate-100 flex-shrink-0 bg-white z-20 relative">
+                {/* PARENT TASK BREADCRUMB */}
+                {(() => {
+                  const t = tasks.find(t => t.id === currentTaskId);
+                  if (t && t.parent_id) {
+                    const p = tasks.find(x => x.id === t.parent_id);
+                    if (p) return (
+                      <button onClick={() => openTaskDetail(p, 'panel')} className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-3 cursor-pointer hover:text-indigo-600 flex items-center gap-1 transition-colors">
+                        <span>↩</span>
+                        <span className="truncate max-w-[300px] border-b border-transparent hover:border-indigo-600">{p.title}</span>
+                      </button>
+                    )
+                  }
+                  return null;
+                })()}
+
                 <div className="flex items-start gap-4">
-                  <input
-                    type="text"
+                  <textarea
                     placeholder="Название задачи"
-                    className="flex-1 text-lg font-bold placeholder:text-slate-300 border-none focus:ring-0 p-0 text-black outline-none bg-transparent leading-tight"
+                    className="flex-1 text-2xl font-bold placeholder:text-slate-300 border-none focus:ring-0 p-0 text-black outline-none bg-transparent leading-tight resize-none overflow-hidden"
                     value={title}
-                    onChange={e => setTitle(e.target.value)}
+                    onChange={e => {
+                      setTitle(e.target.value);
+                      e.target.style.height = 'auto';
+                      e.target.style.height = e.target.scrollHeight + 'px';
+                    }}
+                    rows={1}
+                    style={{ height: 'auto' }}
+                    ref={el => {
+                      if (el) {
+                        el.style.height = 'auto';
+                        el.style.height = el.scrollHeight + 'px';
+                      }
+                    }}
                   />
 
                   <div className="flex items-center gap-2 flex-shrink-0">
                     <button
                       ref={datePickerBtnRef}
                       onClick={() => setShowDatePicker(!showDatePicker)}
-                      className={`flex items-center gap-2 px-3 h-8 rounded-lg border transition ${dueDate ? 'bg-black border-black text-white' : 'bg-white text-slate-400 border-slate-200 hover:bg-slate-50'}`}
+                      className={`flex items-center gap-2 px-3 h-8 rounded-lg border transition ${dueDate ? 'bg-slate-100 border-slate-200 text-slate-700' : 'bg-white text-slate-400 border-slate-200 hover:bg-slate-50'}`}
                     >
                       <span className="text-sm">🗓️</span>
                       <span className="text-[11px] font-bold">
@@ -2228,38 +2630,43 @@ function App() {
                         ) : "Срок"}
                       </span>
                     </button>
-                    <button
-                      onClick={() => setPriority(priority === 'low' ? 'high' : 'low')}
-                      className={`flex items-center justify-center w-8 h-8 rounded-lg border transition ${priority === 'high' ? 'bg-red-50 border-red-100 text-red-600' : 'bg-white text-slate-400 border-slate-200 hover:bg-slate-50'}`}
-                      title="Приоритет"
-                    >
-                      <span className="text-sm">{priority === 'high' ? '🚩' : '🏁'}</span>
-                    </button>
                   </div>
                 </div>
-
-                {showDatePicker && (
-                  <div ref={datePickerRef} className="absolute top-14 right-6 z-50 animate-in fade-in zoom-in-95 duration-200 shadow-2xl rounded-xl border border-slate-100">
-                    <DatePicker
-                      dueDate={dueDate}
-                      setDueDate={setDueDate}
-                      endDate={endDate}
-                      setEndDate={setEndDate}
-                      dueTime={dueTime}
-                      setDueTime={setDueTime}
-                      dueTimeEnd={dueTimeEnd}
-                      setDueTimeEnd={setDueTimeEnd}
-                      duration={duration}
-                      setDuration={setDuration}
-                      onClose={() => setShowDatePicker(false)}
-                      onSave={autoSave}
-                    />
-                  </div>
-                )}
               </div>
+
+              {showDatePicker && (
+                <div ref={datePickerRef} className="absolute top-14 right-6 z-50 animate-in fade-in zoom-in-95 duration-200 shadow-2xl rounded-xl border border-slate-100">
+                  <DatePicker
+                    dueDate={dueDate}
+                    setDueDate={setDueDate}
+                    endDate={endDate}
+                    setEndDate={setEndDate}
+                    dueTime={dueTime}
+                    setDueTime={setDueTime}
+                    dueTimeEnd={dueTimeEnd}
+                    setDueTimeEnd={setDueTimeEnd}
+                    duration={duration}
+                    setDuration={setDuration}
+                    onClose={() => setShowDatePicker(false)}
+                    onSave={autoSave}
+                  />
+                </div>
+              )}
 
               {/* SCROLLABLE BODY */}
               <div className="flex-1 overflow-y-auto p-6 no-scrollbar">
+
+                {aiSuggestion && (
+                  <div className="mb-6 p-4 bg-indigo-50/50 rounded-xl border border-indigo-100 text-indigo-900 text-sm animate-in slide-in-from-top-2 fade-in duration-300">
+                    <div className="flex justify-between items-start mb-2">
+                      <span className="font-bold flex items-center gap-2 text-indigo-600">✨ AI Совет</span>
+                      <button onClick={() => setAiSuggestion(null)} className="text-indigo-400 hover:text-indigo-700 w-5 h-5 flex items-center justify-center rounded-full hover:bg-indigo-100 transition">✕</button>
+                    </div>
+                    <div className="leading-relaxed prose prose-sm max-w-none text-indigo-800">
+                      {aiSuggestion}
+                    </div>
+                  </div>
+                )}
 
                 <textarea
                   placeholder="Детали..."
@@ -2268,72 +2675,135 @@ function App() {
                   onChange={e => setDescription(e.target.value)}
                 />
 
+                {/* SUBTASKS SECTION */}
+                <div className="mb-8 animate-in fade-in duration-300">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Подзадачи</span>
+                  </div>
+                  <div className="space-y-1">
+                    {tasks.filter(t => t.parent_id === currentTaskId).sort((a, b) => a.id - b.id).map(subtask => (
+                      <div key={subtask.id} className="flex items-center gap-2 group" onContextMenu={(e) => handleContextMenu(e, subtask)}>
+                        <input
+                          type="checkbox"
+                          checked={subtask.is_completed}
+                          onChange={() => toggleTask(subtask.id, subtask.is_completed)}
+                          className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-0 cursor-pointer"
+                        />
+                        <input
+                          type="text"
+                          className="flex-1 bg-transparent border-none focus:ring-0 p-0 text-sm"
+                          value={subtask.title}
+                          onChange={(e) => handleTaskTitleBlur(subtask, e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur() }}
+                          placeholder="Подзадача..."
+                        />
+                        <button onClick={() => deleteTask(subtask.id)} className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-500 transition px-2">×</button>
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    onClick={createSubtask}
+                    className="flex items-center gap-2 text-sm font-bold text-slate-400 hover:text-indigo-600 transition mt-3 group"
+                  >
+                    <span className="w-5 h-5 rounded-full border border-slate-300 flex items-center justify-center text-xs group-hover:border-indigo-600 group-hover:bg-indigo-50">+</span>
+                    Добавить подзадачу
+                  </button>
+                </div>
+
               </div>
 
               {/* FIXED FOOTER: Projects & Tags */}
               <div className="p-4 border-t border-slate-100 bg-slate-50/50 flex-shrink-0 z-20">
-                <div className="flex gap-2 relative">
-                  {/* PROJECT SELECTOR */}
-                  <div className="relative">
-                    <button
-                      ref={projectSelectBtnRef}
-                      onClick={() => { setShowProjectSelect(!showProjectSelect); setShowTagSelect(false); }}
-                      className={`px-4 py-3 rounded-xl border text-[11px] font-bold transition flex items-center gap-2 ${listId ? 'bg-black border-black text-white' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}>
-                      <span>📁</span>
-                      {listId ? allLists.find(l => l.id === listId)?.name : 'Проект'}
-                      <span className="opacity-50 text-[10px] ml-1">▼</span>
-                    </button>
+                <div className="flex items-center justify-between relative">
+                  <div className="flex items-center gap-2">
+                    {/* PROJECT SELECTOR */}
+                    <div className="relative">
+                      <button
+                        ref={projectSelectBtnRef}
+                        onClick={() => { setShowProjectSelect(!showProjectSelect); setShowTagSelect(false); }}
+                        className={`px-4 py-3 rounded-xl border text-[11px] font-bold transition flex items-center gap-2 ${listId ? 'bg-slate-100 border-slate-200 text-slate-700' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}>
+                        <span>📁</span>
+                        {listId ? allLists.find(l => l.id === listId)?.name : 'Проект'}
+                        <span className="opacity-50 text-[10px] ml-1">▼</span>
+                      </button>
 
-                    {showProjectSelect && (
-                      <div
-                        ref={projectSelectRef}
-                        className="absolute bottom-full left-0 mb-2 w-64 bg-white rounded-xl shadow-2xl border border-slate-100 p-2 z-50 max-h-60 overflow-y-auto transform origin-bottom animate-in zoom-in-95 duration-200">
-                        <button onClick={() => { setListId(null); setShowProjectSelect(false); }} className="w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition flex items-center gap-2 text-slate-600">
-                          <span>📥</span> Входящие
-                        </button>
-                        {allLists.map(list => (
-                          <button key={list.id} onClick={() => { setListId(list.id); setShowProjectSelect(false); }} className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition flex items-center gap-2 ${listId === list.id ? 'bg-slate-100 text-black' : 'text-slate-600'}`}>
-                            <span>{list.name.toUpperCase().includes('ЦЕЛИ') ? '⭐' : list.name.toUpperCase().includes('КУПИТЬ') ? '🛒' : '📁'}</span>
-                            {list.name}
+                      {showProjectSelect && (
+                        <div
+                          ref={projectSelectRef}
+                          className="absolute bottom-full left-0 mb-2 w-64 bg-white rounded-xl shadow-2xl border border-slate-100 p-2 z-50 max-h-60 overflow-y-auto transform origin-bottom animate-in zoom-in-95 duration-200">
+                          <button onClick={() => { setListId(null); setShowProjectSelect(false); }} className="w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition flex items-center gap-2 text-slate-600">
+                            <span>📥</span> Входящие
                           </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                          {allLists.map(list => (
+                            <button key={list.id} onClick={() => { setListId(list.id); setShowProjectSelect(false); }} className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition flex items-center gap-2 ${listId === list.id ? 'bg-slate-100 text-black' : 'text-slate-600'}`}>
+                              <span>{list.name.toUpperCase().includes('ЦЕЛИ') ? '⭐' : list.name.toUpperCase().includes('КУПИТЬ') ? '🛒' : '📁'}</span>
+                              {list.name}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
 
-                  {/* TAG SELECTOR */}
-                  <div className="relative">
+                    {/* TAG SELECTOR */}
+                    <div className="relative">
+                      <button
+                        ref={tagSelectBtnRef}
+                        onClick={() => { setShowTagSelect(!showTagSelect); setShowProjectSelect(false); }}
+                        className={`px-4 py-3 rounded-xl border text-[11px] font-bold transition flex items-center gap-2 ${selectedTags && selectedTags.length > 0 ? 'bg-slate-100 border-slate-200 text-slate-700' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}>
+                        <span>🏷️</span>
+                        {selectedTags && selectedTags.length > 0 ? `${selectedTags.length} меток` : 'Метки'}
+                        <span className="opacity-50 text-[10px] ml-1">▼</span>
+                      </button>
+
+                      {showTagSelect && (
+                        <div ref={tagSelectRef} className="absolute bottom-full left-0 mb-2 w-64 bg-white rounded-xl shadow-2xl border border-slate-100 p-2 z-50 max-h-60 overflow-y-auto transform origin-bottom animate-in zoom-in-95 duration-200">
+                          {allTags.map(tag => (
+                            <button key={tag.id}
+                              onClick={() => {
+                                const isSelected = selectedTags && selectedTags.some(t => t.id === tag.id)
+                                if (isSelected) setSelectedTags(selectedTags.filter(t => t.id !== tag.id))
+                                else setSelectedTags([...(selectedTags || []), tag])
+                              }}
+                              className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition flex items-center gap-2 mb-1 ${selectedTags && selectedTags.some(t => t.id === tag.id) ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600'}`}
+                            >
+                              <div className="w-2 h-2 rounded-full" style={{ backgroundColor: tag.color || '#cbd5e1' }}></div>
+                              {tag.name}
+                              {selectedTags && selectedTags.some(t => t.id === tag.id) && <span className="ml-auto text-[10px]">✓</span>}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* PRIORITY BUTTON */}
                     <button
-                      ref={tagSelectBtnRef}
-                      onClick={() => { setShowTagSelect(!showTagSelect); setShowProjectSelect(false); }}
-                      className={`px-4 py-3 rounded-xl border text-[11px] font-bold transition flex items-center gap-2 ${selectedTags && selectedTags.length > 0 ? 'bg-black border-black text-white' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}>
-                      <span>🏷️</span>
-                      {selectedTags && selectedTags.length > 0 ? `${selectedTags.length} меток` : 'Метки'}
-                      <span className="opacity-50 text-[10px] ml-1">▼</span>
+                      onClick={() => setPriority(priority === 'low' ? 'high' : 'low')}
+                      className={`px-4 py-3 rounded-xl border text-[11px] font-bold transition flex items-center gap-2 ${priority === 'high' ? 'bg-red-50 border-red-100 text-red-600' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}
+                      title="Приоритет"
+                    >
+                      <span>{priority === 'high' ? '🚩' : '🏁'}</span>
+                      <span>Флаг</span>
                     </button>
-
-                    {showTagSelect && (
-                      <div ref={tagSelectRef} className="absolute bottom-full left-0 mb-2 w-64 bg-white rounded-xl shadow-2xl border border-slate-100 p-2 z-50 max-h-60 overflow-y-auto transform origin-bottom animate-in zoom-in-95 duration-200">
-                        {allTags.map(tag => (
-                          <button key={tag.id}
-                            onClick={() => {
-                              const isSelected = selectedTags && selectedTags.some(t => t.id === tag.id)
-                              if (isSelected) setSelectedTags(selectedTags.filter(t => t.id !== tag.id))
-                              else setSelectedTags([...(selectedTags || []), tag])
-                            }}
-                            className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-50 transition flex items-center gap-2 mb-1 ${selectedTags && selectedTags.some(t => t.id === tag.id) ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600'}`}
-                          >
-                            <div className="w-2 h-2 rounded-full" style={{ backgroundColor: tag.color || '#cbd5e1' }}></div>
-                            {tag.name}
-                            {selectedTags && selectedTags.some(t => t.id === tag.id) && <span className="ml-auto text-[10px]">✓</span>}
-                          </button>
-                        ))}
-                      </div>
-                    )}
                   </div>
-                </div>
-                <div className="mt-2 flex justify-end">
-                  {isSaving ? <span className="text-[9px] text-indigo-400 animate-pulse font-bold uppercase tracking-widest">Сохранение...</span> : <span className="text-[9px] text-slate-300 font-bold uppercase tracking-widest">Автосохранение</span>}
+                  <div className="flex items-center gap-1">
+                    {isSaving && <span className="text-[9px] text-indigo-400 animate-pulse font-bold uppercase tracking-widest mr-2">Сохранение...</span>}
+                    <button
+                      onClick={handleAiSuggest}
+                      disabled={isAiLoading}
+                      className={`flex items-center justify-center w-8 h-8 transition rounded-full ${isAiLoading ? 'cursor-not-allowed opacity-50' : 'text-slate-300 hover:text-indigo-500 hover:bg-indigo-50'}`}
+                      title="AI Совет"
+                    >
+                      {isAiLoading ? <span className="animate-spin">⏳</span> : <span className="text-base">✨</span>}
+                    </button>
+                    <div className="w-[1px] h-4 bg-slate-200 mx-2"></div>
+                    <button
+                      onClick={() => deleteTask(currentTaskId)}
+                      className="flex items-center justify-center w-8 h-8 text-slate-300 hover:text-red-500 transition rounded-full hover:bg-red-50"
+                      title="Удалить задачу"
+                    >
+                      <span className="text-sm">🗑️</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2353,7 +2823,7 @@ function App() {
         isCalendarPanelOpen && (
           <aside
             style={{ width: `${calendarWidth}px` }}
-            className="hidden lg:flex flex-col flex-shrink-0 border-l border-slate-100 bg-[#FAFAFA] sticky top-0 h-screen overflow-hidden group/calendar z-10"
+            className={`${activeView === 'calendar' ? 'hidden' : 'hidden lg:flex'} flex-col flex-shrink-0 border-l border-slate-100 bg-[#FAFAFA] sticky top-0 h-screen overflow-hidden group/calendar z-10`}
           >
             <div
               onMouseDown={() => {
@@ -2397,6 +2867,8 @@ function App() {
                 handleCalendarTaskTouchStart={handleCalendarTaskTouchStart}
                 handleCalendarTaskTouchMove={handleCalendarTaskTouchMove}
                 handleCalendarTaskTouchEnd={handleCalendarTaskTouchEnd}
+                resizingTaskState={resizingTaskState}
+                handleTaskResizeStart={handleTaskResizeStart}
               />
             </div>
 
@@ -2475,68 +2947,31 @@ function App() {
                   onChange={e => setTitle(e.target.value)}
                   autoFocus={modalMode === 'create'}
                 />
-                {/* MARKDOWN EDITOR */}
-                {/* RICH TEXT EDITOR (React Quill) */}
-                <div className="mb-8 editor-container">
-                  <ReactQuill
-                    theme="snow"
-                    value={description}
-                    onChange={setDescription}
-                    placeholder="Детали задачи..."
-                    modules={{
-                      toolbar: [
-                        [{ 'header': [1, 2, false] }],
-                        ['bold', 'italic', 'underline', 'strike'],
-                        [{ 'list': 'ordered' }, { 'list': 'bullet' }],
-                        ['link', 'clean']
-                      ],
-                    }}
-                    className="bg-transparent"
-                  />
-                  <style>{`
-                  .quill {
-                    display: flex;
-                    flex-direction: column;
-                  }
-                  .ql-toolbar {
-                    border: none !important;
-                    border-bottom: 1px solid #f1f5f9 !important;
-                    padding-left: 0 !important;
-                    padding-right: 0 !important;
-                  }
-                  .ql-container {
-                    border: none !important;
-                    font-size: 15px; /* Совпадает с дизайном */
-                  }
-                  .ql-editor {
-                    padding: 16px 0;
-                    min-height: 150px;
-                    color: #64748b; /* text-slate-500 */
-                  }
-                  .ql-editor.ql-blank::before {
-                    color: #e2e8f0; /* text-slate-200 placeholder */
-                    font-style: normal;
-                  }
-                `}</style>
-                </div>
+
+                <textarea
+                  placeholder="Детали задачи..."
+                  className="w-full text-[15px] text-slate-500 placeholder:text-slate-200 border-none focus:ring-0 p-0 resize-none h-40 outline-none mb-8 leading-relaxed bg-transparent"
+                  value={description}
+                  onChange={e => setDescription(e.target.value)}
+                />
 
                 {/* SUBTASKS SECTION */}
                 <div className="mb-8">
                   <div className="space-y-3">
-                    {subtasks.map(st => (
+                    {Array.isArray(subtasks) && subtasks.map(st => (
                       <div key={st.id} className="flex items-start gap-3 group">
                         <button
                           onClick={() => handleToggleSubtask(st.id)}
-                          className={`mt-1 w-5 h-5 rounded border flex items-center justify-center transition ${st.completed ? 'bg-indigo-500 border-indigo-500 text-white' : 'border-slate-300 hover:border-indigo-400'}`}
+                          className={`mt-1 w-5 h-5 rounded border flex items-center justify-center transition ${st.is_completed ? 'bg-indigo-500 border-indigo-500 text-white' : 'border-slate-300 hover:border-indigo-400'}`}
                         >
-                          {st.completed && <span className="text-xs">✓</span>}
+                          {st.is_completed && <span className="text-xs">✓</span>}
                         </button>
                         <input
                           type="text"
-                          value={st.text}
+                          value={st.title || ''}
                           onChange={e => handleSubtaskChange(st.id, e.target.value)}
                           placeholder="Подзадача..."
-                          className={`flex-1 bg-transparent border-none p-0 text-sm focus:ring-0 outline-none ${st.completed ? 'text-slate-400 line-through' : 'text-slate-700'}`}
+                          className={`flex-1 bg-transparent border-none p-0 text-sm focus:ring-0 outline-none ${st.is_completed ? 'text-slate-400 line-through' : 'text-slate-700'}`}
                         />
                         <button onClick={() => handleDeleteSubtask(st.id)} className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-400 transition px-2">×</button>
                       </div>
@@ -2656,6 +3091,24 @@ function App() {
                   </div>
                 </div>
               </div>
+
+              {/* STICKY FOOTER */}
+              <div className="p-4 sm:px-10 border-t border-slate-100 bg-white flex items-center justify-between shrink-0">
+                <button
+                  onClick={() => deleteTask(currentTaskId)}
+                  className="flex items-center gap-2 px-4 py-3 text-slate-300 hover:text-red-500 transition font-bold text-[10px] uppercase tracking-widest hover:bg-red-50 rounded-xl"
+                  title="Удалить задачу"
+                >
+                  <span className="text-sm">🗑️</span>
+                </button>
+
+                <div className="flex items-center gap-4">
+                  {isSaving && <span className="text-[10px] text-indigo-400 animate-pulse font-bold">СОХРАНЕНИЕ...</span>}
+                  <button onClick={() => saveTask()} className="bg-black text-white px-8 py-3 rounded-xl text-sm font-bold hover:bg-slate-800 transition shadow-lg shadow-indigo-500/20">
+                    Готово
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )
@@ -2666,6 +3119,16 @@ function App() {
           writing-mode: vertical-rl;
           transform: rotate(180deg);
         }
+      `}</style>
+      <style jsx global>{`
+        @keyframes fade-in-up {
+          from { opacity: 0; transform: translateY(10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in-up {
+          animation: fade-in-up 0.3s ease-out forwards;
+        }
+
       `}</style>
     </div >
   )
