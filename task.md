@@ -1,0 +1,24 @@
+# MyPlanner Scaling and Optimization
+
+- [x] **Step 1: Zustand Implementation (Remove Prop Drilling)** <!-- id: 0 -->
+    - [x] Refactor all components to use stores <!-- id: 4 -->
+    - [x] Add global Error Handling (Toast) <!-- id: 23 -->
+    - [x] Add real-time auth cleanup <!-- id: 28 -->
+- [x] **Step 2: TypeScript Infrastructure** <!-- id: 8 -->
+    - [x] Install `typescript`, `@types/react`, `@types/node` <!-- id: 9 -->
+    - [ ] Generate DB types: `npx supabase gen types typescript` <!-- id: 30 -->
+    - [x] Create `src/types/index.ts` (Extensions, Utility Types like `Partial<Task>`) <!-- id: 10 -->
+    - [x] Migrate `useAuthStore.js` -> `useAuthStore.ts` <!-- id: 31 -->
+    - [x] Migrate `useTaskStore.js` -> `useTaskStore.ts` (Strongly typed) <!-- id: 32 -->
+    - [x] Migrate `useUIStore.js` -> `useUIStore.ts` <!-- id: 35 -->
+    - [x] Migrate components (`App` done) to `.tsx` with strict props <!-- id: 33 -->
+        - [x] `App.tsx` <!-- id: 36 -->
+        - [x] `Sidebar/index.tsx` <!-- id: 37 -->
+        - [x] `TaskList/index.tsx` <!-- id: 38 -->
+        - [x] `TaskDetail/index.tsx` <!-- id: 39 -->
+        - [x] `Calendar/index.tsx` <!-- id: 40 -->
+        - [x] `SettingsModal/index.tsx` <!-- id: 41 -->
+    - [x] Verify build `tsc && vite build` <!-- id: 34 -->
+- [ ] **Step 3: Supabase Optimization & Security** <!-- id: 13 -->
+- [ ] **Step 4: Performance & UX (React 19)** <!-- id: 17 -->
+- [ ] **Step 5: Verification & Audit** <!-- id: 21 -->
