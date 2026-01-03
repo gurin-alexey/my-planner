@@ -29,12 +29,15 @@ interface MovingState {
     currentY: number
 }
 
-const CalendarView: React.FC<CalendarViewProps> = ({ calendarDays = 7 }) => {
+const CalendarView: React.FC<CalendarViewProps> = () => {
     // Store & Settings
     const allTasks = useTaskStore(state => state.tasks)
     const tasks = React.useMemo(() => {
         return [...allTasks].sort((a, b) => (a.order_index || 0) - (b.order_index || 0))
     }, [allTasks])
+
+    const [viewMode, setViewMode] = useState<'day' | '3days' | 'week'>('week')
+    const daysToShow = viewMode === 'day' ? 1 : viewMode === '3days' ? 3 : 7
 
     const currentDate = useTaskStore(state => state.calendarDate)
     const openTaskDetail = useTaskStore(state => state.openTaskDetail)
@@ -42,6 +45,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({ calendarDays = 7 }) => {
     const updateTask = useTaskStore(state => state.updateTask)
     const draggedTaskId = useTaskStore(state => state.draggedTaskId)
     const setDraggedTaskId = useTaskStore(state => state.setDraggedTaskId)
+    const saveTask = useTaskStore(state => state.saveTask)
 
     // UI Settings
     // @ts-ignore: useUserSettings is JS
@@ -179,6 +183,36 @@ const CalendarView: React.FC<CalendarViewProps> = ({ calendarDays = 7 }) => {
                 setResizingTaskState(null)
             }
             if (movingTaskState) {
+                // Commit move
+                const task = tasks.find((t: Task) => t.id === movingTaskState.id)
+                if (task) {
+                    const deltaY = movingTaskState.currentY - movingTaskState.startY
+                    const minutesDelta = Math.round(deltaY / (hourHeight / 60) / 15) * 15 // Snap to 15m
+
+                    const [h_s, m_s] = (task.due_time || '00:00').split(':').map(Number)
+                    const [h_e, m_e] = (task.end_time || '23:59:59').split(':').map(Number)
+                    const startMin = h_s * 60 + m_s
+                    const endMin = h_e * 60 + m_e
+                    const duration = endMin - startMin
+
+                    const newStartMin = startMin + minutesDelta
+                    const newEndMin = newStartMin + duration
+
+                    const newStartH = Math.floor(newStartMin / 60)
+                    const newStartM = Math.floor(newStartMin % 60)
+                    const newEndH = Math.floor(newEndMin / 60)
+                    const newEndM = Math.floor(newEndMin % 60)
+
+                    const startTimeStr = `${String(newStartH).padStart(2, '0')}:${String(newStartM).padStart(2, '0')}:00`
+                    const endTimeStr = `${String(newEndH).padStart(2, '0')}:${String(newEndM).padStart(2, '0')}:00`
+
+                    updateTask(task.id, {
+                        due_time: startTimeStr,
+                        end_time: endTimeStr,
+                        due_date: task.due_date,
+                        end_date: task.due_date
+                    }, task.tags || [])
+                }
                 setMovingTaskState(null)
             }
         }
@@ -208,17 +242,35 @@ const CalendarView: React.FC<CalendarViewProps> = ({ calendarDays = 7 }) => {
         });
     }
 
+    const handleSlotClick = (date: Date, hour: number) => {
+        // Prevent if dragging or clicking a task
+        if (movingTaskState || resizingTaskState) return;
+
+        const dueTime = `${hour.toString().padStart(2, '0')}:00`
+        const endTime = `${(hour + 1).toString().padStart(2, '0')}:00`
+
+        const title = prompt('Название новой задачи:')
+        if (title && title.trim()) {
+            saveTask(title.trim(), {
+                due_date: format(date, 'yyyy-MM-dd'),
+                due_time: dueTime,
+                end_time: endTime,
+                status: 'todo'
+            })
+        }
+    }
+
     const safeTasks = Array.isArray(tasks) ? tasks : []
 
     const renderWeek = () => {
         let startDate: Date
         let daysList: Date[]
-        if (calendarDays === 7) {
+        if (daysToShow === 7) {
             startDate = startOfWeek(currentDate, { weekStartsOn: 1 })
             daysList = eachDayOfInterval({ start: startDate, end: endOfWeek(startDate, { weekStartsOn: 1 }) })
         } else {
             startDate = currentDate
-            daysList = Array.from({ length: calendarDays || 7 }, (_, i) => addDays(startDate, i))
+            daysList = Array.from({ length: daysToShow || 7 }, (_, i) => addDays(startDate, i))
         }
 
         const allHours = Array.from({ length: 24 }, (_, i) => i)
@@ -263,8 +315,27 @@ const CalendarView: React.FC<CalendarViewProps> = ({ calendarDays = 7 }) => {
         }
 
         return (
-            <div className="flex-1 flex flex-col min-h-0">
-                <div className={`${calendarDays === 1 ? 'hidden md:grid' : 'grid'} border-b border-slate-100 bg-slate-50/30 shrink-0 pr-[10px]`} style={{ gridTemplateColumns: `60px repeat(${calendarDays}, 1fr)` }}>
+            <div className="flex-1 flex flex-col min-h-0 relative">
+                {/* View Switcher */}
+                <div className="absolute top-2 left-1/2 -translate-x-1/2 z-[100] flex bg-white/90 backdrop-blur-md p-1 rounded-2xl shadow-xl border border-slate-100/50 md:top-4">
+                    {[
+                        { id: 'day', label: '1 день' },
+                        { id: '3days', label: '3 дня' },
+                        { id: 'week', label: 'Неделя' }
+                    ].map(mode => (
+                        <button
+                            key={mode.id}
+                            onClick={() => setViewMode(mode.id as any)}
+                            className={`px-4 py-1.5 rounded-xl text-[11px] font-black uppercase tracking-wider transition-all ${viewMode === mode.id
+                                ? 'bg-indigo-600 text-white shadow-lg'
+                                : 'text-slate-400 hover:bg-slate-50'
+                                }`}
+                        >
+                            {mode.label}
+                        </button>
+                    ))}
+                </div>
+                <div className={`${daysToShow === 1 ? 'hidden md:grid' : 'grid'} border-b border-slate-100 bg-slate-50/30 shrink-0 pr-[10px]`} style={{ gridTemplateColumns: `60px repeat(${daysToShow}, 1fr)` }}>
                     <div className="border-r border-slate-100"></div>
                     {daysList.map((day, i) => (
                         <div key={i} className="flex flex-col items-center py-2 border-r border-slate-100">
@@ -276,7 +347,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({ calendarDays = 7 }) => {
                     ))}
                 </div>
 
-                <div id="all-day-row" className={`grid bg-slate-50/30 border-b border-slate-100 min-h-[40px] z-50 pr-[10px]`} style={{ gridTemplateColumns: `60px repeat(${calendarDays}, 1fr)` }}>
+                <div id="all-day-row" className={`grid bg-slate-50/30 border-b border-slate-100 min-h-[40px] z-50 pr-[10px]`} style={{ gridTemplateColumns: `60px repeat(${daysToShow}, 1fr)` }}>
                     <div className="flex items-center justify-center border-r border-slate-100 py-2">
                         <span className="text-[8px] font-black text-slate-400 uppercase vertical-text">Весь день</span>
                     </div>
@@ -326,7 +397,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({ calendarDays = 7 }) => {
                 </div>
 
                 <div ref={gridRef} className="flex-1 overflow-y-scroll custom-scrollbar relative" onTouchStart={handlePinchStart} onTouchMove={handlePinchMove} onTouchEnd={handlePinchEnd}>
-                    <div id="week-view-container" className={`grid bg-white relative`} style={{ height: `${hourHeight * hours.length}px`, gridTemplateColumns: `60px repeat(${calendarDays}, 1fr)` }}>
+                    <div id="week-view-container" className={`grid bg-white relative`} style={{ height: `${hourHeight * hours.length}px`, gridTemplateColumns: `60px repeat(${daysToShow}, 1fr)` }}>
 
 
                         <div className="border-r border-slate-100">
@@ -374,8 +445,19 @@ const CalendarView: React.FC<CalendarViewProps> = ({ calendarDays = 7 }) => {
                                     onDragLeave={() => setDragOverSlot(null)}
                                     onDrop={(e) => handleGridDrop(e, day)}
                                 >
-                                    <div className="absolute inset-0 pointer-events-none">
-                                        {hours.map(h => <div key={h} className="border-b border-slate-50" style={{ height: `${hourHeight}px` }}></div>)}
+                                    <div className="absolute inset-0">
+                                        {hours.map(h => (
+                                            <div
+                                                key={h}
+                                                className="border-b border-slate-50 relative hover:bg-slate-50/50 transition-colors cursor-crosshair group-grid"
+                                                style={{ height: `${hourHeight}px` }}
+                                                onClick={() => handleSlotClick(day, h)}
+                                            >
+                                                <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 pointer-events-none">
+                                                    <span className="text-[10px] font-bold text-indigo-300">+ {h}:00</span>
+                                                </div>
+                                            </div>
+                                        ))}
 
                                         {/* Drag Highlight Area */}
                                         {dragOverSlot?.startsWith(`slot-${dayStr}`) && (() => {
