@@ -33,6 +33,8 @@ function App() {
   const isModalOpen = useTaskStore(state => state.isModalOpen)
   const isSettingsOpen = useTaskStore(state => state.isSettingsOpen)
   const setIsSettingsOpen = (val: boolean) => useTaskStore.setState({ isSettingsOpen: val })
+  const isSidebarOpen = useTaskStore(state => state.isSidebarOpen)
+  const setIsSidebarOpen = (val: boolean) => useTaskStore.setState({ isSidebarOpen: val })
 
   // Initialize Auth
   useEffect(() => {
@@ -83,6 +85,19 @@ function App() {
         </div>
       )}
 
+      {/* MOBILE SIDEBAR MODAL */}
+      {isSidebarOpen && (
+        <div className="fixed inset-0 z-[200] md:hidden flex overflow-hidden">
+          <div
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm animate-in fade-in duration-300"
+            onClick={() => setIsSidebarOpen(false)}
+          />
+          <aside className="relative w-[280px] h-full bg-[#F9F9F9] shadow-2xl animate-in slide-in-from-left duration-300">
+            <SidebarContent />
+          </aside>
+        </div>
+      )}
+
       <aside className="hidden md:block w-64 flex-shrink-0 sticky top-0 h-screen overflow-hidden border-r border-slate-100">
         <SidebarContent />
       </aside>
@@ -90,9 +105,19 @@ function App() {
       <main className="flex-1 h-full flex flex-col items-stretch overflow-hidden relative">
         <div className={`w-full mx-auto md:mx-0 flex flex-col flex-1 overflow-hidden ${activeView === 'calendar' ? '' : 'max-w-4xl px-4 py-8'}`}>
           <header className="flex justify-between items-center mb-6 px-2">
-            <h1 className="text-2xl font-black text-slate-800">
-              {activeView === 'calendar' ? 'Календарь' : activeListName}
-            </h1>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setIsSidebarOpen(true)}
+                className="md:hidden p-1.5 hover:bg-slate-100 rounded-lg transition"
+              >
+                <div className="w-5 h-0.5 bg-slate-600 mb-1"></div>
+                <div className="w-4 h-0.5 bg-slate-600 mb-1"></div>
+                <div className="w-5 h-0.5 bg-slate-600"></div>
+              </button>
+              <h1 className="text-2xl font-black text-slate-800 tracking-tight">
+                {activeView === 'calendar' ? 'Календарь' : activeListName}
+              </h1>
+            </div>
             <div className="flex gap-2">
               <button
                 onClick={() => document.dispatchEvent(new CustomEvent('toggle-search'))}
