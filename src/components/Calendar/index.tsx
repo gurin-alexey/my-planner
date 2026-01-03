@@ -5,7 +5,8 @@ import {
     endOfWeek,
     eachDayOfInterval,
     isToday,
-    addDays
+    addDays,
+    parseISO
 } from 'date-fns'
 import { ru } from 'date-fns/locale'
 import { useTaskStore } from '../../store/useTaskStore'
@@ -27,6 +28,8 @@ interface MovingState {
     id: string
     startY: number
     currentY: number
+    startX: number
+    currentX: number
 }
 
 const CalendarView: React.FC<CalendarViewProps> = () => {
@@ -46,6 +49,7 @@ const CalendarView: React.FC<CalendarViewProps> = () => {
     const draggedTaskId = useTaskStore(state => state.draggedTaskId)
     const setDraggedTaskId = useTaskStore(state => state.setDraggedTaskId)
     const saveTask = useTaskStore(state => state.saveTask)
+    const setIsSidebarOpen = useTaskStore(state => state.setIsSidebarOpen)
 
     // UI Settings
     // @ts-ignore: useUserSettings is JS
@@ -63,6 +67,10 @@ const CalendarView: React.FC<CalendarViewProps> = () => {
     const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
 
     const gridRef = useRef<HTMLDivElement>(null)
+
+    // Touch & Long Press Logic
+    const longPressTimer = useRef<any>(null)
+    const lastTapRef = useRef<number>(0)
 
     // Touch/Pinch Logic
     const pinchDistRef = useRef<number | null>(null)
@@ -142,76 +150,117 @@ const CalendarView: React.FC<CalendarViewProps> = () => {
             if (!resizingTaskState && !movingTaskState) return
 
             let clientY: number
+            let clientX: number
             if ('touches' in e && e.touches.length > 0) {
                 clientY = e.touches[0].clientY
+                clientX = e.touches[0].clientX
             } else if ('clientY' in e) {
                 clientY = (e as MouseEvent).clientY
+                clientX = (e as MouseEvent).clientX
             } else {
                 return
             }
 
             if (resizingTaskState) {
                 e.preventDefault()
-
                 const deltaY = clientY - resizingTaskState.startY
                 const minutesDelta = deltaY / (hourHeight / 60)
                 const newDuration = Math.max(15, resizingTaskState.startDuration + minutesDelta)
-
                 setResizingTaskState(prev => prev ? ({ ...prev, currentDuration: newDuration }) : null)
             }
 
             if (movingTaskState) {
                 e.preventDefault()
-                setMovingTaskState(prev => prev ? ({ ...prev, currentY: clientY }) : null)
+                setMovingTaskState(prev => prev ? ({ ...prev, currentY: clientY, currentX: clientX }) : null)
+
+                // Try to find the slot under finger for highlight
+                const task = tasks.find(t => t.id === movingTaskState.id)
+                const gridRect = gridRef.current?.getBoundingClientRect()
+                if (task && gridRect) {
+                    const relativeX = clientX - gridRect.left
+                    const colWidth = gridRect.width / daysToShow
+                    const dayOffset = Math.floor(relativeX / colWidth)
+
+                    const startDate = startOfWeek(currentDate, { weekStartsOn: 1 })
+                    const targetDay = addDays(startDate, dayOffset)
+                    const dayStr = format(targetDay, 'yyyy-MM-dd')
+
+                    const relativeY = clientY - gridRect.top + gridRef.current!.scrollTop
+                    const hour = Math.floor(relativeY / hourHeight)
+                    const slotId = `slot-${dayStr}-${hour}-0`
+                    if (dragOverSlot !== slotId) setDragOverSlot(slotId)
+                }
             }
         }
 
         const handleWindowUp = (_e: MouseEvent | TouchEvent) => {
+            setDragOverSlot(null) // Clear highlight
+
             if (resizingTaskState) {
-                // Commit resize
                 const task = tasks.find((t: Task) => t.id === resizingTaskState.id)
                 if (task) {
                     const [h_s, m_s] = (task.due_time || '00:00').split(':').map(Number)
                     const startMin = h_s * 60 + m_s
-                    const newEndMin = startMin + resizingTaskState.currentDuration
-                    const newEndH = Math.floor(newEndMin / 60)
+                    const newEndMin = Math.max(startMin + 15, startMin + resizingTaskState.currentDuration)
+                    const newEndH = Math.min(23, Math.floor(newEndMin / 60))
                     const newEndM = Math.floor(newEndMin % 60)
                     const endTimeStr = `${String(newEndH).padStart(2, '0')}:${String(newEndM).padStart(2, '0')}:00`
-
                     updateTask(task.id, { end_time: endTimeStr, end_date: task.due_date }, task.tags || [])
                 }
                 setResizingTaskState(null)
             }
+
             if (movingTaskState) {
-                // Commit move
                 const task = tasks.find((t: Task) => t.id === movingTaskState.id)
                 if (task) {
-                    const deltaY = movingTaskState.currentY - movingTaskState.startY
-                    const minutesDelta = Math.round(deltaY / (hourHeight / 60) / 15) * 15 // Snap to 15m
+                    const gridRect = gridRef.current?.getBoundingClientRect()
+                    const allDayRow = document.getElementById('all-day-row')?.getBoundingClientRect()
 
-                    const [h_s, m_s] = (task.due_time || '00:00').split(':').map(Number)
-                    const [h_e, m_e] = (task.end_time || '23:59:59').split(':').map(Number)
-                    const startMin = h_s * 60 + m_s
-                    const endMin = h_e * 60 + m_e
-                    const duration = endMin - startMin
+                    // Check if dropped in All-Day section
+                    const isAllDayDrop = allDayRow && movingTaskState.currentY >= allDayRow.top && movingTaskState.currentY <= allDayRow.bottom
 
-                    const newStartMin = startMin + minutesDelta
-                    const newEndMin = newStartMin + duration
+                    let dayChange = 0
+                    if (gridRect) {
+                        const colWidth = gridRect.width / daysToShow
+                        const deltaX = movingTaskState.currentX - movingTaskState.startX
+                        dayChange = Math.round(deltaX / colWidth)
+                    }
 
-                    const newStartH = Math.floor(newStartMin / 60)
-                    const newStartM = Math.floor(newStartMin % 60)
-                    const newEndH = Math.floor(newEndMin / 60)
-                    const newEndM = Math.floor(newEndMin % 60)
+                    // Calculate new date
+                    const currentDueDate = parseISO(task.due_date!)
+                    const newDateStr = format(addDays(currentDueDate, dayChange), 'yyyy-MM-dd')
 
-                    const startTimeStr = `${String(newStartH).padStart(2, '0')}:${String(newStartM).padStart(2, '0')}:00`
-                    const endTimeStr = `${String(newEndH).padStart(2, '0')}:${String(newEndM).padStart(2, '0')}:00`
+                    if (isAllDayDrop) {
+                        // Move to All Day (remove time)
+                        updateTask(task.id, {
+                            due_time: null,
+                            end_time: null,
+                            due_date: newDateStr,
+                            end_date: newDateStr
+                        }, task.tags || [])
+                    } else {
+                        // Regular time move
+                        const deltaY = movingTaskState.currentY - movingTaskState.startY
+                        const minutesDelta = Math.round(deltaY / (hourHeight / 60) / 15) * 15
 
-                    updateTask(task.id, {
-                        due_time: startTimeStr,
-                        end_time: endTimeStr,
-                        due_date: task.due_date,
-                        end_date: task.due_date
-                    }, task.tags || [])
+                        const [h_s, m_s] = (task.due_time || '00:00').split(':').map(Number)
+                        const [h_e, m_e] = (task.end_time || '23:59:59').split(':').map(Number)
+                        const startMin = h_s * 60 + m_s
+                        const duration = (h_e * 60 + m_e) - startMin
+
+                        const newStartMin = Math.max(0, Math.min(1440 - duration, startMin + minutesDelta))
+                        const newEndMin = newStartMin + duration
+
+                        const startTimeStr = `${String(Math.floor(newStartMin / 60)).padStart(2, '0')}:${String(newStartMin % 60).padStart(2, '0')}:00`
+                        const endTimeStr = `${String(Math.min(23, Math.floor(newEndMin / 60))).padStart(2, '0')}:${String(newEndMin % 60).padStart(2, '0')}:00`
+
+                        updateTask(task.id, {
+                            due_time: startTimeStr,
+                            end_time: endTimeStr,
+                            due_date: newDateStr,
+                            end_date: newDateStr
+                        }, task.tags || [])
+                    }
                 }
                 setMovingTaskState(null)
             }
@@ -229,34 +278,77 @@ const CalendarView: React.FC<CalendarViewProps> = () => {
             window.removeEventListener('mouseup', handleWindowUp)
             window.removeEventListener('touchend', handleWindowUp)
         }
-    }, [resizingTaskState, movingTaskState, hourHeight, tasks, updateTask])
-
+    }, [resizingTaskState, movingTaskState, hourHeight, tasks, updateTask, daysToShow, currentDate, dragOverSlot])
 
     // Touch Handlers for Tasks (Move)
     const handleCalendarTaskTouchStart = (e: React.TouchEvent, task: Task) => {
         const touch = e.touches[0];
-        setMovingTaskState({
-            id: task.id,
-            startY: touch.clientY,
-            currentY: touch.clientY,
-        });
+        const clientY = touch.clientY;
+        const clientX = touch.clientX;
+
+        if (longPressTimer.current) clearTimeout(longPressTimer.current);
+
+        longPressTimer.current = setTimeout(() => {
+            // @ts-ignore
+            if (window.navigator.vibrate) window.navigator.vibrate(50);
+            setMovingTaskState({
+                id: task.id,
+                startY: clientY,
+                currentY: clientY,
+                startX: clientX,
+                currentX: clientX
+            });
+            longPressTimer.current = null;
+        }, 400);
+    }
+
+    const handleCalendarTaskTouchEnd = () => {
+        if (longPressTimer.current) {
+            clearTimeout(longPressTimer.current);
+            longPressTimer.current = null;
+        }
+    }
+
+    const handleTaskClick = (e: React.MouseEvent | React.TouchEvent, task: Task) => {
+        e.stopPropagation()
+        const now = Date.now()
+        const DOUBLE_TAP_DELAY = 300
+
+        if (now - lastTapRef.current < DOUBLE_TAP_DELAY) {
+            // Double tap - Open Detail and show sidebar
+            openTaskDetail(task, 'panel')
+            setIsSidebarOpen(true)
+            setSelectedTaskId(task.id)
+            lastTapRef.current = 0
+        } else {
+            // Single tap - Just select
+            setSelectedTaskId(task.id)
+            lastTapRef.current = now
+        }
     }
 
     const handleSlotClick = (date: Date, hour: number) => {
-        // Prevent if dragging or clicking a task
-        if (movingTaskState || resizingTaskState) return;
+        const now = Date.now();
+        const DOUBLE_TAP_DELAY = 300;
 
-        const dueTime = `${hour.toString().padStart(2, '0')}:00`
-        const endTime = `${(hour + 1).toString().padStart(2, '0')}:00`
+        if (now - lastTapRef.current < DOUBLE_TAP_DELAY) {
+            if (movingTaskState || resizingTaskState) return;
 
-        const title = prompt('Название новой задачи:')
-        if (title && title.trim()) {
-            saveTask(title.trim(), {
-                due_date: format(date, 'yyyy-MM-dd'),
-                due_time: dueTime,
-                end_time: endTime,
-                status: 'todo'
-            })
+            const dueTime = `${hour.toString().padStart(2, '0')}:00`
+            const endTime = `${(hour + 1).toString().padStart(2, '0')}:00`
+
+            const title = prompt('Название новой задачи:')
+            if (title && title.trim()) {
+                saveTask(title.trim(), {
+                    due_date: format(date, 'yyyy-MM-dd'),
+                    due_time: dueTime,
+                    end_time: endTime,
+                    status: 'todo'
+                })
+            }
+            lastTapRef.current = 0;
+        } else {
+            lastTapRef.current = now;
         }
     }
 
@@ -317,7 +409,7 @@ const CalendarView: React.FC<CalendarViewProps> = () => {
         return (
             <div className="flex-1 flex flex-col min-h-0 relative">
                 {/* View Switcher */}
-                <div className="absolute top-2 left-1/2 -translate-x-1/2 z-[100] flex bg-white/90 backdrop-blur-md p-1 rounded-2xl shadow-xl border border-slate-100/50 md:top-4">
+                <div className="absolute top-2 left-1/2 -translate-x-1/2 z-[150] flex bg-white/90 backdrop-blur-md p-1 rounded-2xl shadow-xl border border-slate-100/50 md:top-4">
                     {[
                         { id: 'day', label: '1 день' },
                         { id: '3days', label: '3 дня' },
@@ -347,7 +439,7 @@ const CalendarView: React.FC<CalendarViewProps> = () => {
                     ))}
                 </div>
 
-                <div id="all-day-row" className={`grid bg-slate-50/30 border-b border-slate-100 min-h-[40px] z-50 pr-[10px]`} style={{ gridTemplateColumns: `60px repeat(${daysToShow}, 1fr)` }}>
+                <div id="all-day-row" className={`grid bg-slate-50/30 border-b border-slate-100 min-h-[40px] z-[60] pr-[10px]`} style={{ gridTemplateColumns: `60px repeat(${daysToShow}, 1fr)` }}>
                     <div className="flex items-center justify-center border-r border-slate-100 py-2">
                         <span className="text-[8px] font-black text-slate-400 uppercase vertical-text">Весь день</span>
                     </div>
@@ -384,8 +476,10 @@ const CalendarView: React.FC<CalendarViewProps> = () => {
                                                 setDraggedTaskId(task.id);
                                             }}
                                             onDragEnd={() => setDraggedTaskId(null)}
-                                            onClick={(e) => { e.stopPropagation(); openTaskDetail(task, 'panel'); setSelectedTaskId(task.id); }}
+                                            onClick={(e) => handleTaskClick(e, task)}
+                                            onDoubleClick={(e) => { e.stopPropagation(); openTaskDetail(task, 'panel'); setSelectedTaskId(task.id); }}
                                             onTouchStart={(e) => handleCalendarTaskTouchStart(e, task)}
+                                            onTouchEnd={handleCalendarTaskTouchEnd}
                                             className={`text-[10px] p-1.5 w-full block truncate rounded-lg cursor-pointer shadow-sm ${task.status === 'done' ? 'bg-slate-100 text-slate-300' : 'bg-white border border-slate-100 text-slate-700'}`}>
                                             {task.title}
                                         </div>
@@ -430,7 +524,9 @@ const CalendarView: React.FC<CalendarViewProps> = () => {
                         {daysList.map((day, i) => {
                             const dayStr = format(day, 'yyyy-MM-dd')
                             const dayTasks = safeTasks.filter((t: Task) => {
-                                if (movingTaskState && movingTaskState.id === t.id) return true
+                                if (movingTaskState && movingTaskState.id === t.id) {
+                                    return dayStr === t.due_date?.split('T')[0]
+                                }
                                 if (!t.due_date || !t.due_time) return false
                                 const startStr = t.due_date.split('T')[0]
                                 const endStr = (t.end_date || t.due_date).split('T')[0]
@@ -452,9 +548,22 @@ const CalendarView: React.FC<CalendarViewProps> = () => {
                                                 className="border-b border-slate-50 relative hover:bg-slate-50/50 transition-colors cursor-crosshair group-grid"
                                                 style={{ height: `${hourHeight}px` }}
                                                 onClick={() => handleSlotClick(day, h)}
+                                                onDoubleClick={() => {
+                                                    const dueTime = `${h.toString().padStart(2, '0')}:00`
+                                                    const endTime = `${(h + 1).toString().padStart(2, '0')}:00`
+                                                    const title = prompt('Название новой задачи:')
+                                                    if (title && title.trim()) {
+                                                        saveTask(title.trim(), {
+                                                            due_date: format(day, 'yyyy-MM-dd'),
+                                                            due_time: dueTime,
+                                                            end_time: endTime,
+                                                            status: 'todo'
+                                                        })
+                                                    }
+                                                }}
                                             >
                                                 <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 pointer-events-none">
-                                                    <span className="text-[10px] font-bold text-indigo-300">+ {h}:00</span>
+                                                    <span className="text-[10px] font-bold text-indigo-300">++ Дважды для задачи</span>
                                                 </div>
                                             </div>
                                         ))}
@@ -465,9 +574,8 @@ const CalendarView: React.FC<CalendarViewProps> = () => {
                                             const hh = parseInt(parts[4]);
                                             const mm = parseInt(parts[5]);
 
-                                            // Find dragged task to get its duration
-                                            const dTask = tasks.find((t: Task) => String(t.id) === String(draggedTaskId));
-                                            let duration = 30; // Default 30 min
+                                            const dTask = tasks.find((t: Task) => String(t.id) === String(draggedTaskId || movingTaskState?.id));
+                                            let duration = 30;
                                             if (dTask && dTask.due_time && dTask.end_time) {
                                                 const [hs, ms] = dTask.due_time.split(':').map(Number);
                                                 const [he, me] = dTask.end_time.split(':').map(Number);
@@ -552,25 +660,26 @@ const CalendarView: React.FC<CalendarViewProps> = () => {
                                                     setDraggedTaskId(task.id);
                                                 }}
                                                 onDragEnd={() => setDraggedTaskId(null)}
-                                                onClick={(e) => {
-                                                    e.stopPropagation()
-                                                    openTaskDetail(task, 'panel')
-                                                    setSelectedTaskId(task.id)
-                                                }}
+                                                onClick={(e) => handleTaskClick(e, task)}
                                                 onTouchStart={(e) => handleCalendarTaskTouchStart(e, task)}
+                                                onTouchEnd={handleCalendarTaskTouchEnd}
+                                                onTouchMove={handleCalendarTaskTouchEnd}
                                                 style={{
                                                     top: `${topPct}%`,
                                                     height: `${heightPct}%`,
                                                     left: `${leftPctArr}%`,
                                                     width: `${widthPctArr}%`,
-                                                    opacity: movingTaskState?.id === task.id ? 0.6 : 1,
-                                                    zIndex: movingTaskState?.id === task.id ? 50 : (isSelected ? 40 : 10),
+                                                    transform: movingTaskState?.id === task.id
+                                                        ? `translateY(${movingTaskState.currentY - movingTaskState.startY}px) translateX(${movingTaskState.currentX - movingTaskState.startX}px) scale(1.05)`
+                                                        : 'none',
+                                                    boxShadow: movingTaskState?.id === task.id ? '0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)' : '',
+                                                    opacity: movingTaskState?.id === task.id ? 0.9 : 1,
+                                                    zIndex: movingTaskState?.id === task.id ? 100 : (isSelected ? 40 : 10),
                                                     touchAction: 'none'
                                                 }}
-                                                id={`calendar-task-${task.id}`}
                                                 className={`absolute p-2 rounded-xl text-[10px] font-bold leading-tight cursor-pointer shadow-md transition-none border-l-4 overflow-hidden 
-                          ${isSelected ? 'ring-2 ring-black ring-offset-1 z-40' : 'hover:z-20'} 
-                          ${task.status === 'done' ? 'bg-slate-100 border-slate-200 text-slate-300 opacity-60' : task.priority === 'high' ? 'bg-red-50 border-red-500 text-red-700' : 'bg-indigo-50 border-indigo-500 text-indigo-700'}`}
+                                                    ${isSelected ? 'ring-2 ring-black ring-offset-1 z-40' : 'hover:z-20'} 
+                                                    ${task.status === 'done' ? 'bg-slate-100 border-slate-200 text-slate-300 opacity-60' : task.priority === 'high' ? 'bg-red-50 border-red-500 text-red-700' : 'bg-indigo-50 border-indigo-500 text-indigo-700'}`}
                                             >
                                                 <div className="">
                                                     <p className="truncate">{task.title}</p>
