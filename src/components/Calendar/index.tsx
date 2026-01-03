@@ -31,11 +31,17 @@ interface MovingState {
 
 const CalendarView: React.FC<CalendarViewProps> = ({ calendarDays = 7 }) => {
     // Store & Settings
-    const tasks = useTaskStore(state => state.getSortedTasks())
+    const allTasks = useTaskStore(state => state.tasks)
+    const tasks = React.useMemo(() => {
+        return [...allTasks].sort((a, b) => (a.order_index || 0) - (b.order_index || 0))
+    }, [allTasks])
+
     const currentDate = useTaskStore(state => state.calendarDate)
     const openTaskDetail = useTaskStore(state => state.openTaskDetail)
     const onDropTaskOnCalendar = useTaskStore(state => state.onDropTaskOnCalendar)
     const updateTask = useTaskStore(state => state.updateTask)
+    const draggedTaskId = useTaskStore(state => state.draggedTaskId)
+    const setDraggedTaskId = useTaskStore(state => state.setDraggedTaskId)
 
     // UI Settings
     // @ts-ignore: useUserSettings is JS
@@ -301,7 +307,12 @@ const CalendarView: React.FC<CalendarViewProps> = ({ calendarDays = 7 }) => {
                                     {allDayTasks.map((task: Task) => (
                                         <div key={task.id}
                                             draggable="true"
-                                            onDragStart={(e) => { e.dataTransfer.setData('taskId', task.id); e.dataTransfer.effectAllowed = 'move'; }}
+                                            onDragStart={(e) => {
+                                                e.dataTransfer.setData('taskId', task.id);
+                                                e.dataTransfer.effectAllowed = 'move';
+                                                setDraggedTaskId(task.id);
+                                            }}
+                                            onDragEnd={() => setDraggedTaskId(null)}
                                             onClick={(e) => { e.stopPropagation(); openTaskDetail(task, 'panel'); setSelectedTaskId(task.id); }}
                                             onTouchStart={(e) => handleCalendarTaskTouchStart(e, task)}
                                             className={`text-[10px] p-1.5 w-full block truncate rounded-lg cursor-pointer shadow-sm ${task.status === 'done' ? 'bg-slate-100 text-slate-300' : 'bg-white border border-slate-100 text-slate-700'}`}>
@@ -316,7 +327,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({ calendarDays = 7 }) => {
 
                 <div ref={gridRef} className="flex-1 overflow-y-scroll custom-scrollbar relative" onTouchStart={handlePinchStart} onTouchMove={handlePinchMove} onTouchEnd={handlePinchEnd}>
                     <div id="week-view-container" className={`grid bg-white relative`} style={{ height: `${hourHeight * hours.length}px`, gridTemplateColumns: `60px repeat(${calendarDays}, 1fr)` }}>
-                        <div id="calendar-ghost-highlight" className="absolute bg-indigo-500/20 border-2 border-indigo-500/50 border-dashed rounded-xl z-0 pointer-events-none hidden transition-all duration-75"></div>
+
 
                         <div className="border-r border-slate-100">
                             {hours.map(h => (
@@ -365,6 +376,35 @@ const CalendarView: React.FC<CalendarViewProps> = ({ calendarDays = 7 }) => {
                                 >
                                     <div className="absolute inset-0 pointer-events-none">
                                         {hours.map(h => <div key={h} className="border-b border-slate-50" style={{ height: `${hourHeight}px` }}></div>)}
+
+                                        {/* Drag Highlight Area */}
+                                        {dragOverSlot?.startsWith(`slot-${dayStr}`) && (() => {
+                                            const parts = dragOverSlot.split('-');
+                                            const hh = parseInt(parts[4]);
+                                            const mm = parseInt(parts[5]);
+
+                                            // Find dragged task to get its duration
+                                            const dTask = tasks.find((t: Task) => String(t.id) === String(draggedTaskId));
+                                            let duration = 30; // Default 30 min
+                                            if (dTask && dTask.due_time && dTask.end_time) {
+                                                const [hs, ms] = dTask.due_time.split(':').map(Number);
+                                                const [he, me] = dTask.end_time.split(':').map(Number);
+                                                duration = (he * 60 + me) - (hs * 60 + ms);
+                                            }
+                                            if (duration < 15) duration = 30;
+
+                                            const displayMinutes = isNightHidden ? (hh - workingStart) * 60 + mm : hh * 60 + mm;
+                                            const totalDisplayMinutes = hours.length * 60;
+                                            const topPct = (displayMinutes / totalDisplayMinutes) * 100;
+                                            const heightPct = (duration / totalDisplayMinutes) * 100;
+
+                                            return (
+                                                <div
+                                                    className="absolute left-1 right-1 bg-indigo-500/10 border-2 border-indigo-500/30 border-dashed rounded-xl z-0 transition-all duration-75"
+                                                    style={{ top: `${topPct}%`, height: `${heightPct}%` }}
+                                                />
+                                            );
+                                        })()}
                                     </div>
 
                                     {dayTasks.map((task: Task) => {
@@ -427,7 +467,9 @@ const CalendarView: React.FC<CalendarViewProps> = ({ calendarDays = 7 }) => {
                                                 onDragStart={(e) => {
                                                     if (resizingTaskState) { e.preventDefault(); return }
                                                     e.dataTransfer.setData('taskId', task.id);
+                                                    setDraggedTaskId(task.id);
                                                 }}
+                                                onDragEnd={() => setDraggedTaskId(null)}
                                                 onClick={(e) => {
                                                     e.stopPropagation()
                                                     openTaskDetail(task, 'panel')

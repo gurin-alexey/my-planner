@@ -113,13 +113,24 @@ const SidebarContent: React.FC = () => {
         <div className="h-full flex flex-col bg-[#F9F9F9] border-r border-slate-200 font-sans text-[#333]">
             <div className="flex-1 overflow-y-auto pt-6 no-scrollbar">
                 {/* APP LOGO */}
-                <div className="px-6 mb-8 flex items-center gap-2 select-none">
-                    <div className="w-6 h-6 bg-red-600 rounded-lg flex items-center justify-center text-white shadow-lg shadow-red-200">
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M4 12h4l3-6 4 12 3-6h2" />
-                        </svg>
+                <div className="px-6 mb-8 flex items-center gap-3 select-none">
+                    <div className="relative w-9 h-9 flex items-center justify-center">
+                        <img
+                            src="/logo.png"
+                            alt="Pulse Logo"
+                            className="w-full h-full object-contain drop-shadow-md"
+                            onError={(e) => {
+                                e.currentTarget.style.display = 'none';
+                                e.currentTarget.parentElement?.querySelector('.fallback-logo')?.classList.remove('hidden');
+                            }}
+                        />
+                        <div className="fallback-logo hidden w-8 h-8 bg-red-600 rounded-xl flex items-center justify-center text-white">
+                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M4 12h4l3-6 4 12 3-6h2" />
+                            </svg>
+                        </div>
                     </div>
-                    <span className="text-lg font-black tracking-tight text-slate-800">PULSE</span>
+                    <span className="text-xl font-black tracking-tighter text-slate-800 uppercase italic">Pulse</span>
                 </div>
 
                 {/* Смарт-списки */}

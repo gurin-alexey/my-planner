@@ -1,6 +1,14 @@
 import React, { useState } from 'react'
 import { useTaskStore } from '../../store/useTaskStore'
 import { Task } from '../../types'
+import confetti from 'canvas-confetti'
+import { useAutoAnimate } from '@formkit/auto-animate/react'
+
+// Helper for animation
+const AnimatedList = ({ children, className }: { children: React.ReactNode, className?: string }) => {
+    const [ref] = useAutoAnimate<HTMLDivElement>()
+    return <div ref={ref} className={className}>{children}</div>
+}
 
 const TaskList: React.FC = () => {
     // Store State
@@ -8,6 +16,11 @@ const TaskList: React.FC = () => {
     const loading = useTaskStore(state => state.loading)
     const collapsedFolders = useTaskStore(state => state.collapsedFolders)
     const toggleFolder = useTaskStore(state => state.toggleFolder)
+    const deleteTask = useTaskStore(state => state.deleteTask)
+
+    // Touch Refs
+    const touchStartX = React.useRef<number | null>(null)
+    const touchStartY = React.useRef<number | null>(null)
 
     const draggedTaskId = useTaskStore(state => state.draggedTaskId)
     const setDraggedTaskId = useTaskStore(state => state.setDraggedTaskId)
@@ -100,17 +113,63 @@ const TaskList: React.FC = () => {
     const [expandedTaskIds, setExpandedTaskIds] = useState<Record<string, boolean>>({})
     const [dragOverTaskId, setDragOverTaskId] = useState<string | null>(null)
     const [dropPosition, setDropPosition] = useState<'top' | 'bottom' | null>(null)
-    const [swipeTaskId] = useState<string | null>(null)
-    const [swipeOffset] = useState<number | null>(null)
+    const [swipeTaskId, setSwipeTaskId] = useState<string | null>(null)
+    const [swipeOffset, setSwipeOffset] = useState<number | null>(null)
     const [exitingTaskIds] = useState<string[]>([])
 
     // Handlers
+    const onTouchStart = (e: React.TouchEvent, taskId: string) => {
+        touchStartX.current = e.touches[0].clientX
+        touchStartY.current = e.touches[0].clientY
+        setSwipeTaskId(taskId as any) // Type hack if needed, or just string
+        setSwipeOffset(0) // Start at 0
+    }
+
+    const onTouchMove = (e: React.TouchEvent) => {
+        if (touchStartX.current === null) return
+        const diffX = e.touches[0].clientX - touchStartX.current
+        const diffY = e.touches[0].clientY - (touchStartY.current || 0)
+
+        // Only swipe if horizontal movement is dominant
+        if (Math.abs(diffX) > Math.abs(diffY)) {
+            setSwipeOffset(diffX)
+        }
+    }
+
+    const onTouchEnd = (e: React.TouchEvent, task: Task) => {
+        if (swipeOffset && Math.abs(swipeOffset) > 100) {
+            if (navigator.vibrate) navigator.vibrate(50)
+            if (swipeOffset > 0) {
+                // Right swipe -> Toggle
+                handleTaskCompletion(e as any, task)
+            } else {
+                // Left swipe -> Delete
+                if (window.confirm('Удалить задачу?')) {
+                    deleteTask(task.id)
+                }
+            }
+        }
+        setSwipeTaskId(null)
+        setSwipeOffset(null)
+        touchStartX.current = null
+        touchStartY.current = null
+    }
+
     const handleContextMenu = (e: React.MouseEvent, _task: Task) => {
         e.preventDefault()
     }
 
     const handleTaskCompletion = (e: React.MouseEvent, task: Task) => {
         e.stopPropagation()
+        if (task.status !== 'done') {
+            confetti({
+                particleCount: 60,
+                spread: 70,
+                origin: { x: e.clientX / window.innerWidth, y: e.clientY / window.innerHeight },
+                colors: ['#6366f1', '#a855f7', '#ec4899'],
+                disableForReducedMotion: true
+            });
+        }
         toggleTask(task.id, task.status)
     }
 
@@ -136,13 +195,24 @@ const TaskList: React.FC = () => {
         const taskTags = task.tags || [];
 
         return (
-            <div key={task.id}>
+            <div key={task.id} className="relative overflow-hidden">
+                {/* Swipe Actions Background */}
+                <div className={`absolute inset-y-0 left-0 bg-emerald-500 flex items-center pl-4 text-white font-bold text-[10px] uppercase tracking-widest transition-all duration-200 ${swipeTaskId === task.id && (swipeOffset || 0) > 0 ? 'opacity-100 w-full' : 'opacity-0 w-0'}`}>
+                    Выполнить
+                </div>
+                <div className={`absolute inset-y-0 right-0 bg-rose-500 flex items-center justify-end pr-4 text-white font-bold text-[10px] uppercase tracking-widest transition-all duration-200 ${swipeTaskId === task.id && (swipeOffset || 0) < 0 ? 'opacity-100 w-full' : 'opacity-0 w-0'}`}>
+                    Удалить
+                </div>
+
                 <div
                     style={{
                         transform: swipeTaskId === task.id ? `translateX(${swipeOffset}px)` : 'none',
                         transition: swipeTaskId === task.id ? 'none' : 'transform 0.2s ease-out'
                     }}
-                    className={`group flex items-center gap-0 min-h-[2.5rem] border-b border-slate-50 transition-all duration-700 ease-in-out relative hover:bg-slate-50
+                    onTouchStart={(e) => onTouchStart(e, task.id)}
+                    onTouchMove={onTouchMove}
+                    onTouchEnd={(e) => onTouchEnd(e, task)}
+                    className={`group flex items-center gap-0 min-h-[2.5rem] border-b border-slate-50 transition-all duration-700 ease-in-out relative hover:bg-slate-50 bg-white
             ${dragOverTaskId === task.id ? 'bg-slate-50/50' : ''}
             ${exitingTaskIds.includes(task.id) ? 'translate-y-24 opacity-0 scale-95 pointer-events-none' : ''}
           `}
@@ -255,7 +325,13 @@ const TaskList: React.FC = () => {
                         {group.tasks.filter(st => st.parent_id && task.id && String(st.parent_id) === String(task.id)).map(subtask => {
                             const isSubtaskDone = subtask.status === 'done';
                             return (
-                                <div key={subtask.id}>
+                                <div key={subtask.id} className="relative overflow-hidden">
+                                    <div className={`absolute inset-y-0 left-0 bg-emerald-500 flex items-center pl-10 text-white font-bold text-[8px] uppercase tracking-widest transition-all duration-200 ${swipeTaskId === subtask.id && (swipeOffset || 0) > 0 ? 'opacity-100 w-full' : 'opacity-0 w-0'}`}>
+                                        Выполнить
+                                    </div>
+                                    <div className={`absolute inset-y-0 right-0 bg-rose-500 flex items-center justify-end pr-4 text-white font-bold text-[8px] uppercase tracking-widest transition-all duration-200 ${swipeTaskId === subtask.id && (swipeOffset || 0) < 0 ? 'opacity-100 w-full' : 'opacity-0 w-0'}`}>
+                                        Delete
+                                    </div>
                                     <div
                                         draggable="true"
                                         onDragStart={(e) => {
@@ -277,11 +353,14 @@ const TaskList: React.FC = () => {
                                             }
                                         }}
                                         onContextMenu={(e) => handleContextMenu(e, subtask)}
+                                        onTouchStart={(e) => onTouchStart(e, subtask.id)}
+                                        onTouchMove={onTouchMove}
+                                        onTouchEnd={(e) => onTouchEnd(e, subtask)}
                                         style={{
                                             transform: swipeTaskId === subtask.id ? `translateX(${swipeOffset}px)` : 'none',
                                             transition: swipeTaskId === subtask.id ? 'none' : 'transform 0.2s ease-out'
                                         }}
-                                        className={`group flex items-start gap-2 py-2 border-b border-slate-50/50 cursor-pointer hover:bg-slate-50/30 transition-colors ml-8 relative
+                                        className={`group flex items-start gap-2 py-2 border-b border-slate-50/50 cursor-pointer hover:bg-slate-50/30 transition-colors ml-8 relative bg-white
                     ${dragOverTaskId === subtask.id ? 'bg-slate-50/50' : ''}
                   `}
                                         onDragOver={e => {
@@ -377,16 +456,18 @@ const TaskList: React.FC = () => {
                             </div>
                         )}
 
-                        {/* ACTIVE */}
-                        {activeTasks.map(t => renderTaskItem(t, group))}
+                        {/* ACTIVE - ANIMATED */}
+                        <AnimatedList className="space-y-0">
+                            {activeTasks.map(t => renderTaskItem(t, group))}
+                        </AnimatedList>
 
                         {/* COMPLETED SECTION */}
                         {completedTasks.length > 0 && (
                             <div className="mt-auto pt-4 flex flex-col relative">
                                 {isCompletedOpen && (
-                                    <div className="space-y-1 mb-2 pl-0 opacity-70 animate-in slide-in-from-top-2 duration-300">
+                                    <AnimatedList className="space-y-1 mb-2 pl-0 opacity-70">
                                         {completedTasks.map(t => renderTaskItem(t, group))}
-                                    </div>
+                                    </AnimatedList>
                                 )}
 
                                 <button

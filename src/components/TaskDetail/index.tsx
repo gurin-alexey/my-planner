@@ -69,7 +69,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({ mode = 'panel' }) => {
             setIsProject(task.is_project || false)
             setSelectedTags(task.tags || [])
         }
-    }, [task?.id])
+    }, [task?.id, task?.due_date, task?.due_time, task?.end_date, task?.end_time])
 
     // Auto-Save Logic
     useEffect(() => {

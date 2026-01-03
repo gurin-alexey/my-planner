@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
 import { supabase } from '../supabase'
 import { format, isToday, parseISO } from 'date-fns'
 import { ru } from 'date-fns/locale'
@@ -85,7 +86,7 @@ interface TaskStore {
     getGroupedTasks: () => { name: string, tasks: Task[] }[]
 }
 
-export const useTaskStore = create<TaskStore>((set, get) => ({
+export const useTaskStore = create<TaskStore>()(persist((set, get) => ({
     tasks: [],
     allTags: [],
     allLists: [],
@@ -332,19 +333,43 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
         let updateData: Partial<Task> = { due_date: newDateStr, updated_at }
 
         if (time && time !== 'all-day') {
-            const start = new Date(`${newDateStr}T${time}`)
-            const end = new Date(start.getTime() + 60 * 60000)
-            updateData = { ...updateData, due_time: time, end_date: format(end, 'yyyy-MM-dd'), end_time: format(end, 'HH:mm:ss') }
+            const task = tasks.find(t => String(t.id) === String(taskId))
+            let duration = 60 // Default
+
+            if (task && task.due_time && task.end_time) {
+                const [hs, ms] = task.due_time.split(':').map(Number)
+                const [he, me] = task.end_time.split(':').map(Number)
+                duration = (he * 60 + me) - (hs * 60 + ms)
+            }
+            if (duration < 1) duration = 60
+
+            const [nh, nm] = time.split(':').map(Number)
+            const totalStartMinutes = nh * 60 + nm
+            const totalEndMinutes = totalStartMinutes + duration
+
+            const eh = Math.floor(totalEndMinutes / 60)
+            const em = totalEndMinutes % 60
+            const endTimeStr = `${String(eh).padStart(2, '0')}:${String(em).padStart(2, '0')}:00`
+
+            updateData = {
+                ...updateData,
+                due_time: time,
+                end_date: newDateStr,
+                end_time: endTimeStr
+            }
         } else {
             updateData = { ...updateData, due_time: null, end_date: newDateStr, end_time: null }
         }
 
         set({ tasks: tasks.map(t => String(t.id) === String(taskId) ? { ...t, ...updateData } : t) })
         try {
-            await supabase.from('tasks').update(updateData).eq('id', taskId)
-            get().fetchData(true)
+            const { error } = await supabase.from('tasks').update(updateData).eq('id', taskId)
+            if (error) throw error
         } catch (error) {
             console.error('Error dropping on calendar:', error)
+            // Rollback if needed, but for now just toast
+            useUIStore.getState().showToast('Ошибка сохранения в календаре', 'error')
+            get().fetchData() // Refresh to sync back correctly
         }
     },
 
@@ -365,7 +390,8 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
             const { error } = await supabase.from('lists').insert([{
                 name,
                 order_index: get().allLists.length,
-                folder_id: null // Explicitly null
+                folder_id: null, // Explicitly null
+                user_id: user.id
             }])
             if (error) throw error
             get().fetchData(true)
@@ -478,4 +504,17 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
             tasks: groups[key]
         }))
     }
+}), {
+    name: 'planner-storage',
+    partialize: (state) => ({
+        tasks: state.tasks,
+        allTags: state.allTags,
+        allLists: state.allLists,
+        allFolders: state.allFolders,
+        collapsedFolders: state.collapsedFolders,
+        sortBy: state.sortBy,
+        groupBy: state.groupBy,
+        dateFilter: state.dateFilter,
+        activeView: state.activeView
+    })
 }))

@@ -6,46 +6,48 @@ import TaskDetail from './components/TaskDetail'
 import TaskList from './components/TaskList'
 import SettingsModal from './components/SettingsModal'
 import Toast from './components/Toast'
+import Auth from './components/Auth'
 
 import { useAuthStore } from './store/useAuthStore'
 import { useTaskStore } from './store/useTaskStore'
+import { useOnlineStatus } from './hooks/useOnlineStatus'
 import { List } from './types'
 
 function App() {
-  // Ensure initSession is stable or used safely
+  const isOnline = useOnlineStatus()
+
   const initSession = useAuthStore(state => state.initSession)
   const session = useAuthStore(state => state.session)
+  const loading = useAuthStore(state => state.loading)
+
   const fetchData = useTaskStore(state => state.fetchData)
   const activeView = useTaskStore(state => state.activeView)
+  const saveTask = useTaskStore(state => state.saveTask)
 
   const activeListName = useTaskStore(state => {
     const list = state.allLists.find((l: List) => l.id === state.selectedListId)
     return list ? list.name : 'Задачи'
   })
 
-  const saveTask = useTaskStore(state => state.saveTask)
-
-  // UI - Modal/Panel Visibility from Store
   const isPanelOpen = useTaskStore(state => state.isPanelOpen)
   const isModalOpen = useTaskStore(state => state.isModalOpen)
-  const setIsSettingsOpen = useTaskStore(state => state.setIsSettingsOpen)
+  const isSettingsOpen = useTaskStore(state => state.isSettingsOpen)
+  const setIsSettingsOpen = (val: boolean) => useTaskStore.setState({ isSettingsOpen: val })
 
-  // Initial Session Load
+  // Initialize Auth
   useEffect(() => {
-    initSession()
-  }, [])
-
-  // Reactive Data Fetching on Session Change
-  useEffect(() => {
-    if (session?.user?.id) {
-      fetchData()
+    const unsubscribePromise = initSession()
+    return () => {
+      unsubscribePromise.then(unsubscribe => unsubscribe && unsubscribe())
     }
-  }, [session?.user?.id]) // Only re-fetch if USER ID changes (login/logout/switch)
+  }, [initSession])
 
+  // Sync Data when session is active
   useEffect(() => {
-    // Auth Listener for cleanup (though onAuthStateChange is handled in store, we might need global reset here if store doesn't handle everything)
-    // Actually useAuthStore handles onAuthStateChange internally for session state.
-    // But we need to clear tasks on logout.
+    if (!session?.user?.id) return
+
+    fetchData()
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
       if (event === 'SIGNED_OUT') {
         useTaskStore.getState().setTasks([])
@@ -53,20 +55,34 @@ function App() {
       }
     })
 
-    // Polling interval (only if session exists)
-    let interval: NodeJS.Timeout
-    if (session?.user?.id) {
-      interval = setInterval(() => fetchData(true), 30000)
-    }
+    const interval = setInterval(() => fetchData(true), 30000)
 
     return () => {
-      if (interval) clearInterval(interval)
+      clearInterval(interval)
       subscription.unsubscribe()
     }
-  }, [session?.user?.id]) // Re-subscribe if user changes
+  }, [session?.user?.id, fetchData])
+
+  if (loading && !session) {
+    return (
+      <div className="h-screen w-full flex items-center justify-center bg-white">
+        <div className="w-12 h-12 border-4 border-indigo-100 border-t-indigo-600 rounded-full animate-spin"></div>
+      </div>
+    )
+  }
+
+  if (!session) {
+    return <Auth />
+  }
 
   return (
     <div className="h-screen bg-white flex font-sans text-[#333] overflow-hidden selection:bg-indigo-100 relative">
+      {!isOnline && (
+        <div className="absolute top-0 left-0 w-full bg-slate-800 text-white text-[10px] font-bold uppercase tracking-widest text-center py-1 z-[9999]">
+          Offline Mode
+        </div>
+      )}
+
       <aside className="hidden md:block w-64 flex-shrink-0 sticky top-0 h-screen overflow-hidden border-r border-slate-100">
         <SidebarContent />
       </aside>

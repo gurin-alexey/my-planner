@@ -26,3 +26,5 @@ dist-ssr
 .env*.local
 .env
 
+.env
+lint_output*.txt

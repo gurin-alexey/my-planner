@@ -6,19 +6,22 @@
     - [x] Add real-time auth cleanup <!-- id: 28 -->
 - [x] **Step 2: TypeScript Infrastructure** <!-- id: 8 -->
     - [x] Install `typescript`, `@types/react`, `@types/node` <!-- id: 9 -->
-    - [ ] Generate DB types: `npx supabase gen types typescript` <!-- id: 30 -->
     - [x] Create `src/types/index.ts` (Extensions, Utility Types like `Partial<Task>`) <!-- id: 10 -->
-    - [x] Migrate `useAuthStore.js` -> `useAuthStore.ts` <!-- id: 31 -->
-    - [x] Migrate `useTaskStore.js` -> `useTaskStore.ts` (Strongly typed) <!-- id: 32 -->
-    - [x] Migrate `useUIStore.js` -> `useUIStore.ts` <!-- id: 35 -->
-    - [x] Migrate components (`App` done) to `.tsx` with strict props <!-- id: 33 -->
-        - [x] `App.tsx` <!-- id: 36 -->
-        - [x] `Sidebar/index.tsx` <!-- id: 37 -->
-        - [x] `TaskList/index.tsx` <!-- id: 38 -->
-        - [x] `TaskDetail/index.tsx` <!-- id: 39 -->
-        - [x] `Calendar/index.tsx` <!-- id: 40 -->
-        - [x] `SettingsModal/index.tsx` <!-- id: 41 -->
-    - [x] Verify build `tsc && vite build` <!-- id: 34 -->
-- [ ] **Step 3: Supabase Optimization & Security** <!-- id: 13 -->
-- [ ] **Step 4: Performance & UX (React 19)** <!-- id: 17 -->
-- [ ] **Step 5: Verification & Audit** <!-- id: 21 -->
+    - [x] Migrate all stores to `.ts` (typed) <!-- id: 31 -->
+    - [x] Migrate all components to `.tsx` <!-- id: 33 -->
+    - [x] Verify build `npm run build` <!-- id: 34 -->
+- [x] **Step 3: Supabase Optimization & Security** <!-- id: 13 -->
+    - [x] Audit RLS policies & Enable for all tables <!-- id: 70 -->
+    - [x] Add missing `user_id` to lists/folders/tags <!-- id: 71 -->
+    - [x] Create `user_settings` table <!-- id: 72 -->
+    - [x] Add performance indexes <!-- id: 73 -->
+- [x] **Step 4: Performance & UX Enhancements** <!-- id: 17 -->
+    - [x] Implement **PWA & Offline Support** (Zustand Persist + VitePWA) <!-- id: 80 -->
+    - [x] Add **Swipe Gestures** (Delete/Complete) for mobile <!-- id: 81 -->
+    - [x] Integrate **Micro-animations** (Auto-Animate) <!-- id: 82 -->
+    - [x] Add **Visual Feedback** (Confetti on completion) <!-- id: 83 -->
+    - [x] Support **Offline Indicators** (Network status banner) <!-- id: 84 -->
+- [ ] **Step 5: Final Verification & Polish** <!-- id: 21 -->
+    - [ ] Final check of Calendar Drag & Drop <!-- id: 90 -->
+    - [ ] Audit for any remaining console errors <!-- id: 91 -->
+    - [ ] Mobile responsive layout check <!-- id: 92 -->
